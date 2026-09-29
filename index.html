@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ISSE Leave Portal</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="dark-mode">
+
+  <!-- Sidebar Section -->
+  <aside class="sidebar">
+    <div class="brand-section" style="display: flex; justify-content: center; align-items: center; padding: 20px 0;">
+      <img src="isselogo.png" alt="ISSE Logo" class="brand-logo-img" style="max-width: 120px; height: auto; display: block; margin: 0 auto;">
+    </div>
+    
+    <nav class="nav-menu">
+      <div class="nav-item" id="leaveMenuToggle" style="cursor: pointer;">
+        <span>LEAVE APPLICATION</span>
+        <span id="arrow">▼</span>
+      </div>
+      <div class="dropdown-container" id="leaveDropdown" style="display: none; padding-left: 15px;">
+        <div class="dropdown-item" data-leave-type="Annual Leave">Annual Leave</div>
+        <div class="dropdown-item" data-leave-type="Maternity Leave (112 Working Days)">Maternity Leave</div>
+        <div class="dropdown-item" data-leave-type="Paternity Leave (14 Working Days)">Paternity Leave</div>
+        <div class="dropdown-item" data-leave-type="Sick Leave (Up to 42 Days)">Sick Leave</div>
+        <div class="dropdown-item" data-leave-type="Casual Leave (5-7 Days)">Casual Leave</div>
+        <div class="dropdown-item" data-leave-type="Study Leave">Study Leave</div>
+        <div class="dropdown-item" data-leave-type="Pre-retirement Leave (3 Months)">Pre-retirement Leave</div>
+        <div class="dropdown-item" data-leave-type="Sabbatical Leave (1 Year)">Sabbatical Leave</div>
+        <div class="dropdown-item" data-leave-type="Custom Leave">Custom Leave</div>
+        <div class="dropdown-item" data-leave-type="Demo Leave (Minutes)">Demo Leave (Testing)</div>
+      </div>
+
+            <div class="nav-item" id="statusNavBtn" style="cursor: pointer;">STATUS</div>
+      <div class="nav-item" id="historyNavBtn" style="cursor: pointer;">HISTORY</div>
+      <div class="nav-item" id="myAttendanceNavBtn" style="cursor: pointer;">MY ATTENDANCE</div>
+      <div class="nav-item" id="myEnquiriesNavBtn" style="cursor: pointer;">
+        <span>MY ENQUIRIES</span>
+        <span id="myEnquiriesBadge" class="nav-badge badge-red" style="display:none;">0</span>
+      </div>
+      <div class="nav-item" id="profileNavBtn" style="cursor: pointer;">PROFILE</div>
+    </nav>
+  </aside>
+
+  <!-- Main Content Section -->
+  <div class="main-wrapper">
+    <header class="header">
+      <h1>ISSE Staff Leave Portal</h1>
+      <div class="header-actions">
+        <button class="btn-theme-toggle" id="themeToggleBtn" aria-label="Toggle Theme">
+          <span id="themeIcon">☀️</span>
+        </button>
+        <button class="btn-logout" id="logoutBtn">Logout</button>
+      </div>
+    </header>
+
+    <div class="content-body">
+
+      <!-- 1. Leave Application Form Section -->
+      <section id="leaveFormSection" class="section-card active">
+        <h2 class="section-title" id="formLeaveTitle">Annual Leave (30 Working Days)</h2>
+        
+        <div class="policy-alert-banner" id="annualLeavePolicyNotice">
+          <div class="policy-alert-icon">⚖️</div>
+          <div class="policy-alert-content">
+            <h4>ISSE Annual Leave Entitlement Rules</h4>
+            <p>• <strong>GL 07 & Above:</strong> 30 Working Days (Full) &nbsp;|&nbsp; 15 + 15 (Split)</p>
+            <p>• <strong>GL 04 – 06:</strong> 21 Working Days (Full) &nbsp;|&nbsp; 11 + 10 (Split)</p>
+            <p>• <strong>GL 03 & Below:</strong> 14 Working Days (Full) &nbsp;|&nbsp; 7 + 7 (Split)</p>
+            <p style="margin-top: 8px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;">• <strong>Two-Week Advance Notice:</strong> Applications must be submitted at least 14 days prior to commencement.</p>
+            <p>• <strong>Annual Quota:</strong> Annual leave can strictly be granted once per calendar year, in one Full period OR split into two halves.</p>
+            <p>• <strong>Splitting:</strong> When split, the first half is taken before the second half. Both halves must fall in the same calendar year.</p>
+          </div>
+        </div>
+
+        <div class="policy-alert-banner" id="maternityLeavePolicyNotice" style="display: none;">
+          <div class="policy-alert-icon">⚖️</div>
+          <div class="policy-alert-content">
+            <h4>ISSE Maternity Leave Rules</h4>
+            <p>• <strong>Duration:</strong> 112 Working Days (Full Pay).</p>
+            <p>• <strong>Minimum Start Point:</strong> May commence 28 working days before expected delivery.</p>
+            <p>• <strong>Adoption:</strong> 84 Working Days for adoption of a child under 4 months.</p>
+            <p style="margin-top: 8px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;">• <strong>Requirement:</strong> A medical certificate showing the expected date of confinement is required.</p>
+            <p>• <strong>Note:</strong> Annual leave for that year is regarded as part of maternity leave under the stated rule.</p>
+          </div>
+        </div>
+
+        <form id="leaveApplicationForm">
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="fullName">Full Name</label>
+              <input type="text" id="fullName" placeholder="e.g. John Doe" required readonly>
+            </div>
+            <div class="form-group">
+              <label for="isseStaffNo">ISSE Staff Number</label>
+              <input type="text" id="isseStaffNo" placeholder="e.g. ISSE/ST/2026/042" required readonly>
+            </div>
+            <div class="form-group">
+              <label for="designation">Designation</label>
+              <input type="text" id="designation" placeholder="e.g. Senior IT Officer" required readonly>
+            </div>
+            <div class="form-group">
+              <label for="gradeLevel">Grade Level (GL)</label>
+              <input type="text" id="gradeLevel" placeholder="e.g. GL 12" required readonly>
+            </div>
+            <div class="form-group">
+              <label for="department">Department / Division</label>
+              <input type="text" id="department" placeholder="e.g. Information Technology" required readonly>
+            </div>
+            <div class="form-group">
+              <label for="submissionDate">Submission Date</label>
+              <input type="date" id="submissionDate" required>
+            </div>
+            <div class="form-group full-width">
+              <label for="approvingPath">Approving Authority Path (Through / To)</label>
+              <input type="text" id="approvingPath" value="Through: Head of Unit (HOU), To: Head of Admin" required readonly>
+            </div>
+            <div class="form-group">
+              <label for="startDate">Commencement Date</label>
+              <input type="date" id="startDate" required onclick="this.showPicker && this.showPicker()">
+            </div>
+            <div class="form-group">
+              <label for="endDate">Concluding Date</label>
+              <input type="date" id="endDate" required onclick="this.showPicker && this.showPicker()">
+            </div>
+            <div class="form-group full-width">
+              <label for="totalDays">Calculated Duration</label>
+              <input type="text" id="totalDays" readonly placeholder="Select dates..." style="font-weight: bold; color: #f1c40f;">
+            </div>
+
+            <div class="form-group full-width">
+              <label for="staffComments">Reason / Remarks (Optional)</label>
+              <textarea id="staffComments" rows="3" placeholder="Provide any additional details regarding your leave application..."></textarea>
+            </div>
+
+            <div class="form-group full-width">
+              <label for="attachment">Attach Supporting Documents (Optional — PDF, JPG, PNG, DOC up to 5MB)</label>
+              <input type="file" id="attachment" accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx">
+            </div>
+          </div>
+          <button type="submit" class="btn-submit">Submit Leave Request</button>
+        </form>
+      </section>
+
+      <!-- 2. Status Section (Active Leaves Only) -->
+      <section id="statusSection" class="section-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 8px;">
+          <h2 class="section-title" style="margin: 0;">Active Leave Status & Progress</h2>
+          <div style="display: flex; gap: 8px;">
+            <button id="viewToggleCardsBtn" class="btn-action btn-action-print" style="padding: 5px 12px; font-size: 0.78rem;">🗂️ Executive Cards</button>
+            <button id="viewToggleTableBtn" class="btn-action" style="padding: 5px 12px; font-size: 0.78rem; background: var(--bg-main); border: 1px solid var(--border-color); color: var(--text-primary);">📋 Table View</button>
+          </div>
+        </div>
+        <p class="section-desc">Track your active applications through the approval pipeline and manage duty resumption.</p>
+        
+        <div class="table-toolbar">
+          <input 
+            type="text" 
+            id="statusSearchInput" 
+            class="table-search-input"
+            placeholder="Search active leaves by category, dates, or status..." 
+          >
+          <select id="statusSortSelect" class="table-select">
+            <option value="newest">Sort: Newest First</option>
+            <option value="oldest">Sort: Oldest First</option>
+          </select>
+        </div>
+
+        <div id="statusCardsContainer">
+          <div class="empty-state-cell" style="background: var(--card-bg); border-radius: 8px; border: 1px dashed var(--border-color);">
+            Please log in with your ISSE File Number to view active leaves.
+          </div>
+        </div>
+
+        <div class="table-responsive" id="statusTableWrapper" style="display: none; margin-top: 15px;">
+          <table class="portal-table">
+            <thead>
+              <tr>
+                <th>Date Applied</th>
+                <th>Leave Category</th>
+                <th>Duration</th>
+                <th>Leave Period</th>
+                <th>Current Status</th>
+                <th>Resumption Clearance</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="statusTableBody">
+              <tr>
+                <td colspan="7" class="empty-state-cell">Please log in with your ISSE File Number to view active leaves.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 3. History Section (Completed & Rejected Leaves) -->
+      <section id="historySection" class="section-card">
+        <h2 class="section-title">Completed & Archived Leave History</h2>
+        <p class="section-desc">Official archive of fully completed leaves and rejected applications.</p>
+        
+        <div class="table-toolbar">
+          <input 
+            type="text" 
+            id="historySearchInput" 
+            class="table-search-input"
+            placeholder="Search archived leaves by category, dates, or status..." 
+          >
+          <select id="historySortSelect" class="table-select">
+            <option value="newest">Sort: Newest First</option>
+            <option value="oldest">Sort: Oldest First</option>
+          </select>
+        </div>
+
+        <div class="table-responsive">
+          <table class="portal-table">
+            <thead>
+              <tr>
+                <th>Date Applied</th>
+                <th>Leave Category</th>
+                <th>Duration</th>
+                <th>Concluded Period</th>
+                <th>Final Status</th>
+                <th>Resumption Clearance</th>
+                <th>Remarks / Reason</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="historyTableBody">
+              <tr>
+                <td colspan="8" class="empty-state-cell">Please log in with your ISSE File Number to view archived leave history.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+            </section>
+
+      <!-- 3b. My Attendance Section -->
+      <section id="myAttendanceSection" class="section-card">
+        <h2 class="section-title">My Monthly Attendance</h2>
+        <p class="section-desc">Your official attendance records as imported by HR.</p>
+
+        <div class="table-toolbar">
+          <label for="myAttendanceMonthSelect" style="font-weight: 600; font-size: 0.85rem; color: var(--text-muted); align-self: center;">Viewing:</label>
+          <select id="myAttendanceMonthSelect" class="table-select" style="min-width: 200px;">
+            <option value="">No data available</option>
+          </select>
+        </div>
+
+        <div class="table-responsive">
+          <table class="portal-table">
+            <thead>
+              <tr>
+                <th>Present</th>
+                <th>Absent</th>
+                <th>Working Days</th>
+                <th>Attendance %</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="myAttendanceTableBody">
+              <tr>
+                <td colspan="6" class="empty-state-cell">Log in to view your attendance.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+            <!-- 3c. My Enquiries Section -->
+      <section id="myEnquiriesSection" class="section-card">
+        <h2 class="section-title">My Enquiries</h2>
+        <p class="section-desc">
+          Send a message to HR/Admin and view their replies. Replies also arrive in your email.
+        </p>
+
+        <form id="newEnquiryForm">
+          <div class="form-grid">
+            <div class="form-group full-width">
+              <label for="enquirySubject">Subject <span style="color: var(--text-muted); font-weight: normal;">(Optional)</span></label>
+              <input type="text" id="enquirySubject" placeholder="e.g. Question about my promotion">
+            </div>
+            <div class="form-group full-width">
+              <label for="enquiryMessage">Your Message *</label>
+              <textarea id="enquiryMessage" rows="5" placeholder="Write your enquiry here..." required></textarea>
+            </div>
+          </div>
+          <button type="submit" class="btn-submit" id="submitEnquiryBtn">Submit Enquiry</button>
+        </form>
+
+        <h3 style="margin-top: 32px; margin-bottom: 12px; color: var(--accent-gold); font-size: 1rem; letter-spacing: 0.4px;">
+          MY PAST ENQUIRIES
+        </h3>
+
+        <div class="table-responsive">
+          <table class="portal-table">
+            <thead>
+              <tr>
+                <th>Date Sent</th>
+                <th>Subject</th>
+                <th>Preview</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="myEnquiriesTableBody">
+              <tr>
+                <td colspan="5" class="empty-state-cell">Log in to view your enquiries.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 4. Profile Section -->
+      <section id="profileSection" class="section-card">
+        <h2 class="section-title">Staff Database Profile</h2>
+        <div class="info-row"><span>Full Name:</span> <strong id="infoName">--</strong></div>
+        <div class="info-row"><span>ISSE Staff Number:</span> <strong id="infoIppis">--</strong></div>
+        <div class="info-row"><span>Department:</span> <strong id="infoDept">--</strong></div>
+        <div class="info-row"><span>Grade Level:</span> <strong id="infoGl">--</strong></div>
+        <div class="info-row"><span>Official Email:</span> <strong id="infoEmail">--</strong></div>
+        <div class="info-row"><span>Last Promotion:</span> <strong id="infoLastPromotion">--</strong></div>
+        <div class="info-row"><span>Next Promotion:</span> <strong id="infoNextPromotion">--</strong></div>
+        <div class="info-row"><span>Annual Leave Entitlement:</span> <strong id="infoAnnualEntitlement">--</strong></div>
+      </section>
+
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+
+  <!-- Custom Website Modal Notification -->
+  <div id="customModal" class="modal-overlay" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <span class="modal-title">System Message</span>
+        <button class="modal-close-btn" id="modalCloseBtn">&times;</button>
+      </div>
+      <div class="modal-body" id="modalMessage"></div>
+      <div class="modal-footer">
+        <button class="btn-modal-ok" id="modalOkBtn">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Staff Portal Login Modal -->
+  <div id="staffLoginModal" class="modal-overlay" style="display: flex;">
+    <div class="modal-card" style="max-width: 400px; text-align: center;">
+      <div class="modal-header">
+        <span class="modal-title">Staff Portal Login</span>
+      </div>
+      <div class="modal-body" style="padding: 20px 0;">
+        <p style="margin-bottom: 15px; color: #ccc;">Enter your unique ISSE File Number to access your portal.</p>
+        <input 
+          type="text" 
+          id="loginFileNoInput" 
+          placeholder="e.g. ISSE/ST/2026/042" 
+          style="width: 100%; padding: 10px; border-radius: 4px; border: 1px solid #444; background: #1e1e1e; color: #fff; box-sizing: border-box; text-align: center;"
+        >
+      </div>
+      <div class="modal-footer">
+        <button class="btn-submit" id="staffLoginBtn" style="width: 100%;">Login to Portal</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Staff Duty Resumption Notification Modal -->
+  <div id="resumptionModal" class="modal-overlay" style="display: none;">
+    <div class="modal-card" style="max-width: 480px;">
+      <div class="modal-header">
+        <span class="modal-title">Notify Return to Duty</span>
+        <button class="modal-close-btn" id="resumptionModalCloseBtn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="resumptionForm">
+          <input type="hidden" id="resumptionRequestId">
+          <p style="margin-bottom: 14px; font-size: 0.9rem; color: var(--text-muted);">
+            Officially notify your Head of Unit (HOU) that you have returned and resumed official duties.
+          </p>
+          <div class="form-group" style="margin-bottom: 14px;">
+            <label for="resumptionDateInput" style="font-weight: bold;">Official Resumption Date</label>
+            <input type="date" id="resumptionDateInput" required style="width: 100%;" onclick="this.showPicker && this.showPicker()">
+          </div>
+          <div class="form-group" style="margin-bottom: 16px;">
+            <label for="resumptionRemarksInput">Resumption Notes / Statement (Optional)</label>
+            <textarea id="resumptionRemarksInput" rows="3" placeholder="e.g. Resumed duty in good standing." style="width: 100%;"></textarea>
+          </div>
+          <button type="submit" class="btn-submit" style="width: 100%;">Submit Return Notification</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Annual Leave Choice Modal -->
+  <div id="annualChoiceModal" class="modal-overlay" style="display: none;">
+    <div class="modal-card" style="max-width: 520px;">
+      <div class="modal-header">
+        <span class="modal-title">Annual Leave Options</span>
+        <button class="modal-close-btn" onclick="closeAnnualChoiceModal()">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 22px;">
+        <div id="annualChoiceInfo" style="margin-bottom: 18px; font-size: 0.9rem; line-height: 1.55;"></div>
+        <div id="annualChoiceButtons" style="display: flex; flex-direction: column; gap: 10px;"></div>
+        <div style="margin-top: 18px; text-align: right;">
+          <button class="btn-modal-ok" style="background: #555; color: #fff;" onclick="closeAnnualChoiceModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+    <!-- My Attendance Detail Modal (day-by-day grid) -->
+  <div id="myAttendanceDetailModal" class="modal-overlay" style="display: none;">
+    <div class="modal-card" style="max-width: 900px;">
+      <div class="modal-header">
+        <span class="modal-title" id="myAttendanceDetailTitle">My Attendance Detail</span>
+        <button class="modal-close-btn" onclick="closeMyAttendanceDetailModal()">&times;</button>
+      </div>
+      <div class="modal-body modal-scroll-body" style="padding: 20px;">
+        <div id="myAttendanceDetailBody">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Leave Cancellation Confirmation Modal -->
+  <div id="cancelLeaveModal" class="modal-overlay" style="display: none;">
+    <div class="modal-card" style="max-width: 460px;">
+      <div class="modal-header">
+        <span class="modal-title">Cancel Leave Application</span>
+        <button class="modal-close-btn" onclick="closeCancelLeaveModal()">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 22px;">
+        <p style="margin-bottom: 14px; color: var(--text-primary); font-size: 0.92rem;" id="cancelLeaveMessage">
+          Are you sure you want to cancel this leave application?
+        </p>
+        <div style="background: rgba(220,38,38,0.1); border-left: 4px solid #DC2626; padding: 12px 14px; border-radius: 4px; margin-bottom: 18px; font-size: 0.82rem; line-height: 1.5;">
+          <strong style="color: #DC2626;">This action cannot be undone.</strong><br>
+          Your application will be permanently withdrawn from the approval pipeline. You may submit a fresh leave request afterwards.
+        </div>
+        <div style="display: flex; gap: 10px; justify-content: flex-end;">
+          <button class="btn-modal-ok" style="background: #555; color: #fff;" onclick="closeCancelLeaveModal()">Keep Application</button>
+          <button class="btn-modal-ok" style="background: #DC2626; color: #fff;" id="cancelLeaveConfirmBtn">Yes, Cancel Application</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Official Printable Certificate & Return Slip Modal -->
+  <div id="printableSlipModal" class="modal-overlay" style="display: none;">
+    <div class="modal-card printable-slip-card">
+      <div class="modal-header no-print">
+        <span class="modal-title" id="slipModalTitle">Official Leave Document</span>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button class="btn-action btn-action-print" onclick="window.print()" style="padding: 6px 14px; font-size: 0.85rem;">🖨️ Print / Save PDF</button>
+          <button class="modal-close-btn" id="printModalCloseBtn">&times;</button>
+        </div>
+      </div>
+      <div class="modal-body" style="padding: 10px;" id="printableSlipContent">
+        <!-- Rendered dynamically by script.js -->
+      </div>
+      <div class="modal-footer no-print">
+        <button class="btn-action btn-action-print" onclick="window.print()">🖨️ Print Document</button>
+        <button class="btn-modal-ok" id="printModalOkBtn" style="margin-left: 8px;">Close</button>
+      </div>
+    </div>
+  </div>
+
+    <!-- My Enquiry Detail Modal (staff-side view of own enquiry + admin reply) -->
+  <div id="myEnquiryDetailModal" class="modal-overlay" style="display: none;">
+    <div class="modal-card" style="max-width: 640px;">
+      <div class="modal-header">
+        <span class="modal-title" id="myEnquiryDetailTitle">Enquiry Detail</span>
+        <button class="modal-close-btn" onclick="closeMyEnquiryDetailModal()">&times;</button>
+      </div>
+      <div class="modal-body modal-scroll-body" style="padding: 22px;">
+        <div id="myEnquiryDetailBody">Loading...</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-modal-ok" onclick="closeMyEnquiryDetailModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+    <!-- Custom Prompt Modal for Portal Inputs -->
+  <div id="promptModal" class="modal-overlay" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <span class="modal-title" id="promptTitle">Input Required</span>
+      </div>
+      <div class="modal-body">
+        <p id="promptMessage" style="margin-bottom: 12px; color: var(--text-muted);"></p>
+        <input type="text" id="promptInput" style="width: 100%; padding: 10px; border-radius: 4px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text-primary); box-sizing: border-box;">
+      </div>
+      <div class="modal-footer" style="display: flex; gap: 10px; justify-content: flex-end;">
+        <button class="btn-modal-ok" onclick="closePromptModal()" style="background: #555; color: #fff;">Cancel</button>
+        <button class="btn-modal-ok" onclick="submitPromptModal()">OK</button>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

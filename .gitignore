@@ -1,0 +1,22 @@
+# Dependencies — never committed, installed via npm on the server
+node_modules/
+
+# Environment secrets — never committed
+.env
+backend/.env
+!.env.example
+
+# SQLite leftovers from the pre-Supabase era — dead weight
+*.db
+*.sqlite
+*.sqlite3
+database.js.sqlite-backup
+
+# OS / editor junk
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
