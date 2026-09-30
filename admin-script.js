@@ -3932,6 +3932,18 @@ let _editingAttendance = null;
 function openAttendanceEditModal(fileNo) {
   if (!currentAttendanceYear || !currentAttendanceMonth) return;
 
+  // Reset the Save button to a clean state. It lives in static HTML
+  // (outside the re-rendered #editAttendanceRecordBody), so a previous
+  // save that disabled it and set the label to "Saving..." persists
+  // across open/close cycles. Without this reset, the button stays
+  // stuck — and a disabled button swallows all clicks, so save does
+  // nothing until the page is reloaded.
+  const saveBtn = document.getElementById('editAttendanceRecordSaveBtn');
+  if (saveBtn) {
+    saveBtn.disabled = false;
+    saveBtn.textContent = 'Save Changes';
+  }
+
   const record = cachedAttendanceRecords.find(
     r => String(r.isse_file_no).toLowerCase() === String(fileNo).toLowerCase()
   );
@@ -4103,14 +4115,18 @@ async function saveAttendanceEdit() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Save failed.');
 
-    closeEditAttendanceRecordModal();
+        closeEditAttendanceRecordModal();
     showAlert(data.message || 'Attendance record updated.');
 
     // Refresh the table so the updated counts and % appear
     await loadAttendanceRecords();
+
+    // The button is reset on next modal open, but restore it here too
+    // so the DOM is left in a clean state either way.
+    if (btn) { btn.disabled = false; btn.textContent = 'Save Changes'; }
   } catch (err) {
     showAlert(err.message);
-    if (btn) { btn.disabled = false; btn.textContent = orig; }
+    if (btn) { btn.disabled = false; btn.textContent = orig || 'Save Changes'; }
   }
 }
 
