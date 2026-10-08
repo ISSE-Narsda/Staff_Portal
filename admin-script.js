@@ -140,6 +140,16 @@ function closeModal(id) {
 
 // Converts a Date object OR date string OR Postgres date value into
 // the "YYYY-MM-DD" format that <input type="date"> expects.
+// Generates a fresh staff password of the form Isse-XXXX-XXXX.
+// Mirrors the backend helper so admin-generated and server-generated
+// passwords look the same.
+function generateStaffPassword() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  const pick = () => chars[Math.floor(Math.random() * chars.length)];
+  const block = () => Array.from({ length: 4 }, pick).join('');
+  return `Isse-${block()}-${block()}`;
+}
+
 function formatDateForInput(val) {
   if (!val) return '';
   if (val instanceof Date) {
@@ -456,6 +466,7 @@ function switchAdminTab(tabId) {
     else if (tabId === 'profileSection') loadProfileSection();
   else if (tabId === 'rolesSection') loadRolesPage();
     else if (tabId === 'usersSection') loadUsersPage();
+  else if (tabId === 'settingsSection') loadLeaveTypeVisibility();
 }
 
 // ================= DASHBOARD =================
@@ -604,7 +615,7 @@ function loadLeaveMgmtTable(statusFilter = 'all') {
     .then(res => res.json())
     .then(rows => {
       if (!rows || rows.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-muted);">No leave applications found for this view.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted);">No leave applications found for this view.</td></tr>';
         return;
       }
 
@@ -657,6 +668,12 @@ function loadLeaveMgmtTable(statusFilter = 'all') {
           ? `<button class="action-btn btn-download" style="padding: 3px 8px; font-size: 0.72rem;" onclick="viewLeaveAttachment(${r.attachment_id})">📎 View</button>`
           : `<span style="color:var(--text-muted); font-size:0.75rem;">—</span>`;
 
+        const relieverHtml = r.relieving_officer_name
+          ? `<div style="font-size:0.82rem;">${r.relieving_officer_name}</div>
+             <div style="font-size:0.72rem; color: var(--accent-gold); font-family: monospace;">${r.relieving_officer_file_no || ''}</div>
+             ${r.relieving_officer_department ? `<div style="font-size:0.72rem; color: var(--text-muted);">${r.relieving_officer_department}</div>` : ''}`
+          : `<span style="color:var(--text-muted); font-size:0.75rem;">—</span>`;
+
         return `
           <tr>
             <td>#LA-${r.id}</td>
@@ -665,6 +682,7 @@ function loadLeaveMgmtTable(statusFilter = 'all') {
             <td>${r.leave_type}</td>
             <td>${formatDateDisplay(r.start_date)} to ${formatDateDisplay(r.end_date)} (${r.total_days})</td>
             <td><span class="status-badge ${badgeClass}">${r.overall_status}</span></td>
+            <td>${relieverHtml}</td>
             <td>${remarksHtml}</td>
             <td>${attachmentHtml}</td>
             <td>${actionBtns || '<span style="color:var(--text-muted); font-size:0.75rem;">Completed</span>'}</td>
@@ -1100,25 +1118,45 @@ function applyStaffFilters() {
 
   // ---- Render ----
   if (rows.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-muted);">No staff match the current filters.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted);">No staff match the current filters.</td></tr>';
     return;
   }
 
-    tbody.innerHTML = rows.map(s => `
-    <tr>
-      <td><strong>${s.isse_file_no}</strong></td>
-      <td style="white-space: nowrap;">${s.full_name}</td>
-      <td><span class="dept-badge">${s.department}</span></td>
-      <td>${s.designation}<br><small style="color: var(--text-muted);">(${s.grade_level})</small></td>
-      <td>${s.gender || 'Male'}</td>
-      <td>${s.official_email || '—'}</td>
-      <td>${s.last_promotion_date ? formatDateDisplay(formatDateForInput(s.last_promotion_date)) : '—'}</td>
-      <td>${s.next_promotion_date ? formatDateDisplay(formatDateForInput(s.next_promotion_date)) : '—'}</td>
-      <td>
-        <button class="action-btn btn-edit" onclick="openStaffProfileModal(${s.id})">View Profile</button>
-      </td>
-    </tr>
-  `).join('');
+    const isSuperAdmin = currentAdminUser && currentAdminUser.authority === 'full';
+
+  tbody.innerHTML = rows.map(s => {
+    // Password cell — only Super Admin sees actionable controls
+    let passwordCell;
+    if (!isSuperAdmin) {
+      passwordCell = `<span style="color: var(--text-muted); font-size: 0.75rem;">🔒 Restricted</span>`;
+    } else if (!s.has_password) {
+      passwordCell = `<span style="color: var(--text-muted); font-size: 0.75rem;">— not set —</span>`;
+    } else {
+      passwordCell = `
+        <span id="pwd-cell-${s.id}" style="display: inline-flex; align-items: center; gap: 4px;">
+          <span style="font-family: monospace; letter-spacing: 2px; color: var(--text-muted);">••••••••</span>
+          <button class="action-btn btn-edit" style="padding: 2px 6px; font-size: 0.68rem;" onclick="revealTablePassword(${s.id})" title="Reveal password">👁</button>
+        </span>
+      `;
+    }
+
+    return `
+      <tr>
+        <td><strong>${s.isse_file_no}</strong></td>
+        <td style="white-space: nowrap;">${s.full_name}</td>
+        <td><span class="dept-badge">${s.department}</span></td>
+        <td>${s.designation}<br><small style="color: var(--text-muted);">(${s.grade_level})</small></td>
+        <td>${s.gender || 'Male'}</td>
+        <td>${s.official_email || '—'}</td>
+        <td>${s.last_promotion_date ? formatDateDisplay(formatDateForInput(s.last_promotion_date)) : '—'}</td>
+        <td>${s.next_promotion_date ? formatDateDisplay(formatDateForInput(s.next_promotion_date)) : '—'}</td>
+        <td>${passwordCell}</td>
+        <td>
+          <button class="action-btn btn-edit" onclick="openStaffProfileModal(${s.id})">View Profile</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
 }
 
 function openAddStaffModal() {
@@ -1132,6 +1170,8 @@ function openAddStaffModal() {
   if (lastPromoEl) lastPromoEl.value = '';
   const nextPromoEl = document.getElementById('staffRegNextPromotion');
   if (nextPromoEl) nextPromoEl.value = '';
+  const pwdEl = document.getElementById('staffRegPassword');
+  if (pwdEl) pwdEl.value = generateStaffPassword();
 
   const deptSel = document.getElementById('staffRegDepartment');
   if (deptSel) deptSel.innerHTML = '<option value="">-- Select Department --</option>';
@@ -1150,6 +1190,11 @@ function openAddStaffModal() {
   openModal('registerStaffModal');
 }
 
+function regenerateStaffRegPassword() {
+  const el = document.getElementById('staffRegPassword');
+  if (el) el.value = generateStaffPassword();
+}
+
 function handleCreateStaff(e) {
   e.preventDefault();
 
@@ -1162,9 +1207,14 @@ function handleCreateStaff(e) {
   const officialEmail = document.getElementById('staffRegEmail')?.value.trim();
   const lastPromotionDate = document.getElementById('staffRegLastPromotion')?.value || null;
   const nextPromotionDate = document.getElementById('staffRegNextPromotion')?.value || null;
+  const password = document.getElementById('staffRegPassword')?.value.trim() || '';
 
   if (!isseFileNo || !fullName || !department || !designation || !gradeLevel) {
     showAlert('Please fill in all required fields.');
+    return;
+  }
+  if (!password || password.length < 4) {
+    showAlert('Please provide a login password (minimum 4 characters).');
     return;
   }
 
@@ -1174,7 +1224,8 @@ function handleCreateStaff(e) {
     body: JSON.stringify({
       isseFileNo, fullName, department, designation, gradeLevel,
       officialEmail, gender,
-      lastPromotionDate, nextPromotionDate
+      lastPromotionDate, nextPromotionDate,
+      password
     })
   })
     .then(async res => {
@@ -1209,6 +1260,19 @@ function openStaffProfileModal(staffId) {
       document.getElementById('staffProfileLastPromotion').value = formatDateForInput(s.last_promotion_date);
       document.getElementById('staffProfileNextPromotion').value = formatDateForInput(s.next_promotion_date);
 
+      // Super Admin password controls
+      const pwdSection = document.getElementById('staffProfilePasswordSection');
+      const pwdValueInput = document.getElementById('staffProfilePasswordValue');
+      if (pwdSection) {
+        pwdSection.style.display = (currentAdminUser && currentAdminUser.authority === 'full') ? 'block' : 'none';
+      }
+      if (pwdValueInput) {
+        // Show masked if set, empty + placeholder if not.
+        pwdValueInput.value = s.has_password ? '••••••••' : '';
+        pwdValueInput.dataset.hasPassword = s.has_password ? '1' : '0';
+        pwdValueInput.dataset.staffId = s.id;
+      }
+
       // Department dropdown
       const deptSel = document.getElementById('staffProfileDepartment');
       deptSel.innerHTML = '<option value="">-- Select Department --</option>';
@@ -1225,6 +1289,198 @@ function openStaffProfileModal(staffId) {
       openModal('staffProfileModal');
     })
     .catch(() => showAlert('Failed to load staff profile.'));
+}
+
+// ================= SUPER ADMIN PASSWORD CONTROLS =================
+// Two paths:
+//   - View Profile modal buttons (Reveal / Save / Regenerate):
+//     call the endpoint directly, no re-auth.
+//   - Table cell Reveal button:
+//     still asks for the Super Admin's login password as a
+//     secondary confirmation.
+// The backend accepts an optional adminPassword; when it's
+// omitted, the action proceeds directly.
+
+let pendingPasswordAction = null; // only used by the table reveal path
+
+function openAdminReauth(action) {
+  if (!currentAdminUser || currentAdminUser.authority !== 'full') {
+    showAlert('Only the Super Admin can perform this action.');
+    return;
+  }
+  pendingPasswordAction = action;
+
+  const promptEl = document.getElementById('adminReauthPrompt');
+  const inputEl = document.getElementById('adminReauthPasswordInput');
+  const errEl = document.getElementById('adminReauthError');
+
+  if (promptEl) {
+    promptEl.textContent = 'Enter your Super Admin login password to reveal this staff member\'s password.';
+  }
+  if (inputEl) inputEl.value = '';
+  if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+
+  openModal('adminReauthModal');
+  setTimeout(() => inputEl && inputEl.focus(), 80);
+}
+
+function closeAdminReauthModal() {
+  closeModal('adminReauthModal');
+  pendingPasswordAction = null;
+  const inputEl = document.getElementById('adminReauthPasswordInput');
+  if (inputEl) inputEl.value = '';
+  const errEl = document.getElementById('adminReauthError');
+  if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+}
+
+async function submitAdminReauth() {
+  const action = pendingPasswordAction;
+  if (!action) return;
+
+  const inputEl = document.getElementById('adminReauthPasswordInput');
+  const errEl = document.getElementById('adminReauthError');
+  const btn = document.getElementById('adminReauthConfirmBtn');
+  const adminPassword = inputEl ? inputEl.value : '';
+
+  if (!adminPassword) {
+    if (errEl) { errEl.style.display = 'block'; errEl.textContent = 'Please enter your password.'; }
+    return;
+  }
+
+  const orig = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Verifying...'; }
+
+  try {
+    const res = await fetch(`${API_BASE}/admin/staff/${action.staffId}/reveal-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ adminPassword })
+    });
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Action failed.');
+
+    const cell = document.getElementById(`pwd-cell-${action.staffId}`);
+    if (cell) {
+      cell.innerHTML = `
+        <span style="font-family: monospace; font-size: 0.8rem;">${data.password}</span>
+        <button class="action-btn btn-reject" style="padding: 2px 6px; font-size: 0.68rem; margin-left: 6px;" onclick="hideTablePassword(${action.staffId})" title="Hide">✖</button>
+      `;
+    }
+
+    closeAdminReauthModal();
+  } catch (err) {
+    if (errEl) { errEl.style.display = 'block'; errEl.textContent = err.message; }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = orig; }
+  }
+}
+
+// --- Profile modal actions (no re-auth — direct call) ---
+
+async function revealStaffProfilePassword() {
+  const inputEl = document.getElementById('staffProfilePasswordValue');
+  const staffId = inputEl ? inputEl.dataset.staffId : null;
+  if (!staffId) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/admin/staff/${staffId}/reveal-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Could not reveal password.');
+
+    inputEl.value = data.password;
+    inputEl.dataset.hasPassword = '1';
+  } catch (err) {
+    showAlert(err.message);
+  }
+}
+
+async function saveStaffProfilePassword() {
+  const inputEl = document.getElementById('staffProfilePasswordValue');
+  const staffId = inputEl ? inputEl.dataset.staffId : null;
+  if (!staffId) return;
+
+  const value = inputEl.value.trim();
+  if (!value || value.startsWith('••')) {
+    showAlert('Please enter a new password or use Regenerate.');
+    return;
+  }
+  if (value.length < 4) {
+    showAlert('Password must be at least 4 characters.');
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/admin/staff/${staffId}/password`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newPassword: value })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Could not save password.');
+
+    inputEl.value = data.password;
+    inputEl.dataset.hasPassword = '1';
+    showAlert('Password updated successfully.');
+    loadStaffTable();
+  } catch (err) {
+    showAlert(err.message);
+  }
+}
+
+async function regenerateStaffProfilePassword() {
+  const inputEl = document.getElementById('staffProfilePasswordValue');
+  const staffId = inputEl ? inputEl.dataset.staffId : null;
+  if (!staffId) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/admin/staff/${staffId}/password`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Could not regenerate password.');
+
+    inputEl.value = data.password;
+    inputEl.dataset.hasPassword = '1';
+    showAlert('New password generated.');
+    loadStaffTable();
+  } catch (err) {
+    showAlert(err.message);
+  }
+}
+
+// --- Table cell reveal (keeps the re-auth confirmation) ---
+function revealTablePassword(staffId) {
+  openAdminReauth({ type: 'reveal', staffId: Number(staffId), source: 'table' });
+}
+
+function hideTablePassword(staffId) {
+  const cell = document.getElementById(`pwd-cell-${staffId}`);
+  if (!cell) return;
+  cell.innerHTML = `
+    <span style="font-family: monospace; letter-spacing: 2px; color: var(--text-muted);">••••••••</span>
+    <button class="action-btn btn-edit" style="padding: 2px 6px; font-size: 0.68rem; margin-left: 6px;" onclick="revealTablePassword(${staffId})" title="Reveal">👁</button>
+  `;
+}
+
+// --- Table cell action (only when column shows a reveal button) ---
+function revealTablePassword(staffId) {
+  openAdminReauth({ type: 'reveal', staffId: Number(staffId), source: 'table' });
+}
+
+function hideTablePassword(staffId) {
+  const cell = document.getElementById(`pwd-cell-${staffId}`);
+  if (!cell) return;
+  cell.innerHTML = `
+    <span style="font-family: monospace; letter-spacing: 2px; color: var(--text-muted);">••••••••</span>
+    <button class="action-btn btn-edit" style="padding: 2px 6px; font-size: 0.68rem; margin-left: 6px;" onclick="revealTablePassword(${staffId})" title="Reveal">👁</button>
+  `;
 }
 
 function handleUpdateStaffProfile(e) {
@@ -1588,7 +1844,88 @@ function handleDeleteDept() {
 }
 
 
-// ================= REPORTS =================
+// ================= LEAVE TYPE VISIBILITY =================
+
+let cachedLeaveTypeVisibility = { hidden: [], available: [] };
+
+async function loadLeaveTypeVisibility() {
+  const list = document.getElementById('leaveTypesVisibilityList');
+  const status = document.getElementById('leaveTypesVisibilityStatus');
+  if (!list) return;
+
+  list.innerHTML = '<em style="color: var(--text-muted);">Loading…</em>';
+  if (status) status.textContent = '';
+
+  try {
+    const res = await fetch(`${API_BASE}/admin/settings/hidden-leave-types`);
+    if (!res.ok) throw new Error('Failed to load.');
+    const data = await res.json();
+
+    cachedLeaveTypeVisibility = {
+      hidden: Array.isArray(data.hidden) ? data.hidden : [],
+      available: Array.isArray(data.available) ? data.available : []
+    };
+
+    if (!cachedLeaveTypeVisibility.available.length) {
+      list.innerHTML = '<em style="color: var(--text-muted);">No leave types available.</em>';
+      return;
+    }
+
+    list.innerHTML = cachedLeaveTypeVisibility.available.map(t => {
+      const isVisible = !cachedLeaveTypeVisibility.hidden.includes(t.key);
+      const keySafe = String(t.key).replace(/"/g, '&quot;');
+      return `
+        <label style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; cursor: pointer;">
+          <input type="checkbox"
+                 class="leave-type-visible-checkbox"
+                 data-key="${keySafe}"
+                 ${isVisible ? 'checked' : ''}
+                 style="width: auto; accent-color: var(--accent-gold);">
+          <span style="flex: 1;">
+            <div style="font-weight: 600; color: var(--text-primary); font-size: 0.9rem;">${t.label}</div>
+            <div style="font-size: 0.72rem; color: var(--text-muted); font-family: monospace;">${t.key}</div>
+          </span>
+          <span style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px;">${isVisible ? 'Visible' : 'Hidden'}</span>
+        </label>
+      `;
+    }).join('');
+  } catch (err) {
+    console.error('Leave visibility load error:', err);
+    list.innerHTML = '<em style="color: #DC2626;">Could not load leave types.</em>';
+  }
+}
+
+async function saveLeaveTypeVisibility() {
+  const status = document.getElementById('leaveTypesVisibilityStatus');
+  const boxes = document.querySelectorAll('.leave-type-visible-checkbox');
+  if (!boxes.length) return;
+
+  const allKeys = Array.from(boxes).map(b => b.getAttribute('data-key'));
+  const checkedKeys = new Set(
+    Array.from(boxes).filter(b => b.checked).map(b => b.getAttribute('data-key'))
+  );
+  const hidden = allKeys.filter(k => !checkedKeys.has(k));
+
+  if (status) status.textContent = 'Saving…';
+
+  try {
+    const res = await fetch(`${API_BASE}/admin/settings/hidden-leave-types`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hidden })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Save failed.');
+
+    cachedLeaveTypeVisibility.hidden = data.hidden || hidden;
+    if (status) status.textContent = `✓ Saved (${hidden.length} hidden)`;
+
+    // Refresh the badges so label text updates
+    loadLeaveTypeVisibility();
+  } catch (err) {
+    if (status) status.textContent = '✗ ' + err.message;
+  }
+}
 
 function loadReports() {
   const container = document.getElementById('reportSummaryContainer');
@@ -1910,9 +2247,16 @@ function loadNotifDropdown() {
           return `
             <div class="notif-item ${n.is_read ? '' : 'unread'}"
                  onclick="openNotification(${n.id}, '${linkSafe}')">
-              <div class="notif-item-title">${n.title || 'Notification'}</div>
-              <div class="notif-item-msg">${n.message || ''}</div>
-              <div class="notif-item-time">${formatNotifTime(n.created_at)}</div>
+              <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;">
+                <div style="flex: 1; min-width: 0;">
+                  <div class="notif-item-title">${n.title || 'Notification'}</div>
+                  <div class="notif-item-msg">${n.message || ''}</div>
+                  <div class="notif-item-time">${formatNotifTime(n.created_at)}</div>
+                </div>
+                <button class="notif-delete-btn"
+                        title="Delete notification"
+                        onclick="event.stopPropagation(); deleteAdminNotification(${n.id})">🗑️</button>
+              </div>
             </div>
           `;
         }).join('');
@@ -1942,6 +2286,75 @@ function openNotification(id, linkSection) {
         refreshNotifBadge();
       }
     });
+}
+
+// Generic custom-styled confirm dialog (replaces native confirm()).
+let _adminConfirmCallback = null;
+
+function showAdminConfirm(title, message, yesLabel, onConfirm) {
+  const modal = document.getElementById('adminConfirmModal');
+  const titleEl = document.getElementById('adminConfirmTitle');
+  const msgEl = document.getElementById('adminConfirmMessage');
+  const yesBtn = document.getElementById('adminConfirmYesBtn');
+  if (!modal || !yesBtn) {
+    if (window.confirm(message)) onConfirm && onConfirm();
+    return;
+  }
+
+  if (titleEl) titleEl.textContent = title || 'Confirm Action';
+  if (msgEl) msgEl.textContent = message || '';
+  yesBtn.textContent = yesLabel || 'Confirm';
+  _adminConfirmCallback = onConfirm;
+
+  yesBtn.onclick = () => {
+    const cb = _adminConfirmCallback;
+    closeAdminConfirmModal();
+    if (cb) cb();
+  };
+
+  modal.style.display = 'flex';
+}
+
+function closeAdminConfirmModal() {
+  const modal = document.getElementById('adminConfirmModal');
+  if (modal) modal.style.display = 'none';
+  _adminConfirmCallback = null;
+}
+
+function deleteAdminNotification(id) {
+  showAdminConfirm(
+    'Delete Notification',
+    'Delete this notification? This cannot be undone.',
+    'Delete',
+    () => {
+      fetch(`${API_BASE}/notifications/${id}`, { method: 'DELETE' })
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(() => {
+          loadNotifDropdown();
+          refreshNotifBadge();
+        })
+        .catch(() => showAlert('Could not delete the notification.'));
+    }
+  );
+}
+
+function clearAllAdminNotifications(event) {
+  if (event) event.stopPropagation();
+
+  showAdminConfirm(
+    'Clear All Notifications',
+    'Delete ALL visible notifications? This cannot be undone.',
+    'Delete All',
+    () => {
+      fetch(`${API_BASE}/notifications/all`, { method: 'DELETE' })
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(() => {
+          loadNotifDropdown();
+          refreshNotifBadge();
+        })
+        .catch(() => showAlert('Could not clear notifications.'));
+    }
+  );
 }
 
 function markAllNotificationsRead(event) {
@@ -2907,7 +3320,8 @@ async function handleBulkStaffImport() {
       designation,
       gradeLevel,
       gender: gender || 'Male',
-      officialEmail: email || null
+      officialEmail: email || null,
+      password: generateStaffPassword()
     });
   });
 
@@ -2932,7 +3346,8 @@ async function handleBulkStaffImport() {
     if (!res.ok) throw new Error(data.error || 'Bulk import failed.');
 
     closeModal('bulkStaffModal');
-    showAlert(data.message || `Successfully imported ${staffList.length} staff members.`);
+    const baseMsg = data.message || `Successfully imported ${staffList.length} staff members.`;
+    showAlert(baseMsg + '\n\nA random login password was generated for each new staff member. Open the Staff Directory, click View Profile on any staff, and use the Reveal button to see their password.');
     loadStaffTable();
     loadDepartmentsTable();
   } catch (err) {
@@ -4595,6 +5010,58 @@ document.addEventListener('click', function(e) {
   if (modal && e.target === modal) {
     closeStaffEnquiryModal();
   }
+});
+
+// ================= ADMIN MOBILE SIDEBAR DRAWER =================
+
+function openAdminSidebarDrawer() {
+  const sidebar = document.querySelector('.sidebar');
+  const backdrop = document.getElementById('adminSidebarBackdrop');
+  if (!sidebar) return;
+  sidebar.classList.add('open');
+  if (backdrop) backdrop.classList.add('show');
+}
+
+function closeAdminSidebarDrawer() {
+  const sidebar = document.querySelector('.sidebar');
+  const backdrop = document.getElementById('adminSidebarBackdrop');
+  if (!sidebar) return;
+  sidebar.classList.remove('open');
+  if (backdrop) backdrop.classList.remove('show');
+}
+
+function toggleAdminSidebarDrawer() {
+  const sidebar = document.querySelector('.sidebar');
+  if (!sidebar) return;
+  if (sidebar.classList.contains('open')) closeAdminSidebarDrawer();
+  else openAdminSidebarDrawer();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('adminHamburgerBtn');
+  const backdrop = document.getElementById('adminSidebarBackdrop');
+
+  if (btn) btn.addEventListener('click', toggleAdminSidebarDrawer);
+  if (backdrop) backdrop.addEventListener('click', closeAdminSidebarDrawer);
+
+  // Auto-close the drawer when a nav item is picked on mobile
+  document.querySelectorAll('#adminSidebarNav .nav-item').forEach(el => {
+    el.addEventListener('click', () => {
+      if (window.matchMedia('(max-width: 767px)').matches) {
+        closeAdminSidebarDrawer();
+      }
+    });
+  });
+
+  // On resize past the mobile breakpoint, close the drawer
+  window.addEventListener('resize', () => {
+    if (window.innerWidth > 767) closeAdminSidebarDrawer();
+  });
+
+  // Escape closes it
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeAdminSidebarDrawer();
+  });
 });
 
 window.loadStaffEnquiriesPage = loadStaffEnquiriesPage;

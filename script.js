@@ -51,6 +51,7 @@ const PUBLIC_HOLIDAYS = new Set([
 let currentStaff = null;
 let currentLeaveType = 'Annual Leave (30 Working Days)';
 let cachedLeaveRecords = [];
+let hiddenLeaveTypes = [];   // populated from /api/settings/hidden-leave-types
 
 // ============================================================
 // CUSTOM PORTAL ALERT & PROMPT (Replaces generic browser popups)
@@ -243,6 +244,7 @@ document.addEventListener('DOMContentLoaded', () => {
       populateStaffProfile(currentStaff);
       if (loginModal) loginModal.style.display = 'none';
       fetchStaffLeaveHistory(currentStaff.isse_file_no);
+      refreshStaffNotifBadge();
     } catch (e) {
       sessionStorage.removeItem('currentStaff');
       showLoginModal();
@@ -271,6 +273,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (arrow) arrow.textContent = isHidden ? '▲' : '▼';
     });
   }
+
+  // Load hidden leave types and filter the dropdown
+  applyHiddenLeaveTypes();
 
   // Select Leave Type from Dropdown
   const dropdownItems = document.querySelectorAll('.dropdown-item');
@@ -382,6 +387,9 @@ document.addEventListener('DOMContentLoaded', () => {
     logoutBtn.addEventListener('click', handleLogout);
   }
 
+  // Change Password form
+  document.getElementById('changePasswordForm')?.addEventListener('submit', handleChangePassword);
+
   // Resumption & Print Modal Listeners
   document.getElementById('resumptionForm')?.addEventListener('submit', handleResumptionSubmission);
   document.getElementById('resumptionModalCloseBtn')?.addEventListener('click', closeResumptionModal);
@@ -432,6 +440,11 @@ function setupDateConstraints() {
 }
 
 function selectLeaveType(typeName) {
+  if (hiddenLeaveTypes.includes(typeName)) {
+    alert('This leave type is not currently offered. Please pick another.');
+    return;
+  }
+
   let finalLeaveType = typeName;
   let isDemoLeave = false;
 
@@ -540,6 +553,61 @@ function selectLeaveType(typeName) {
     setupDateConstraints();
   }
   showSection('leaveFormSection');
+}
+
+// ================= CHANGE PASSWORD =================
+
+async function handleChangePassword(e) {
+  if (e) e.preventDefault();
+  if (!currentStaff) return;
+
+  const currentEl  = document.getElementById('currentPasswordInput');
+  const newEl      = document.getElementById('newPasswordInput');
+  const confirmEl  = document.getElementById('confirmPasswordInput');
+
+  const currentPassword = currentEl ? currentEl.value : '';
+  const newPassword     = newEl ? newEl.value : '';
+  const confirmPassword = confirmEl ? confirmEl.value : '';
+
+  if (!currentPassword || !newPassword || !confirmPassword) {
+    alert('Please fill in all three password fields.');
+    return;
+  }
+  if (newPassword.length < 4) {
+    alert('New password must be at least 4 characters.');
+    return;
+  }
+  if (newPassword !== confirmPassword) {
+    alert('New password and confirmation do not match.');
+    return;
+  }
+  if (newPassword === currentPassword) {
+    alert('New password must be different from your current password.');
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/auth/staff-change-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        isseFileNo: currentStaff.isse_file_no,
+        currentPassword,
+        newPassword
+      })
+    });
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to change password.');
+
+    alert('Password changed successfully.');
+
+    if (currentEl) currentEl.value = '';
+    if (newEl)     newEl.value = '';
+    if (confirmEl) confirmEl.value = '';
+  } catch (err) {
+    alert(err.message);
+  }
 }
 
 // ================= ANNUAL LEAVE CHOICE =================
@@ -752,18 +820,25 @@ function calculateLeaveDays() {
 
 async function handleStaffLogin() {
   const input = document.getElementById('loginFileNoInput');
+  const pwdInput = document.getElementById('loginPasswordInput');
+
   if (!input || !input.value.trim()) {
     alert('Please enter a valid ISSE File Number.');
     return;
   }
+  if (!pwdInput || !pwdInput.value) {
+    alert('Please enter your password.');
+    return;
+  }
 
   const isseFileNo = input.value.trim();
+  const password = pwdInput.value;
 
   try {
     const response = await fetch(`${API_BASE}/auth/staff-login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ isseFileNo })
+      body: JSON.stringify({ isseFileNo, password })
     });
 
     const data = await response.json();
@@ -782,6 +857,7 @@ async function handleStaffLogin() {
     if (loginModal) loginModal.style.display = 'none';
 
     await fetchStaffLeaveHistory(currentStaff.isse_file_no);
+    refreshStaffNotifBadge();
 
     const savedSec = sessionStorage.getItem('activeSection') || 'statusSection';
     showSection(savedSec);
@@ -984,6 +1060,11 @@ async function handleLeaveSubmission(e) {
     }
   }
 
+  if (!selectedRelievingOfficer) {
+    alert('Please select a Relieving Officer — start typing a name and pick from the suggestions.');
+    return;
+  }
+
   const payload = {
     isseFileNo: currentStaff.isse_file_no,
     fullName: currentStaff.full_name,
@@ -994,7 +1075,10 @@ async function handleLeaveSubmission(e) {
     endDate: endDateVal,
     totalDays: totalDaysVal,
     remarks: document.getElementById('staffComments')?.value || '',
-    attachmentId: attachmentId
+    attachmentId: attachmentId,
+    relievingOfficerName: selectedRelievingOfficer.name,
+    relievingOfficerFileNo: selectedRelievingOfficer.file_no,
+    relievingOfficerDepartment: selectedRelievingOfficer.department
   };
 
   try {
@@ -1016,6 +1100,7 @@ async function handleLeaveSubmission(e) {
     if (commentsInput) commentsInput.value = '';
     const attachInput = document.getElementById('attachment');
     if (attachInput) attachInput.value = '';
+    clearRelievingOfficer();
 
     await fetchStaffLeaveHistory(currentStaff.isse_file_no);
     showSection('statusSection');
@@ -1775,8 +1860,86 @@ function handleLogout() {
   cachedLeaveRecords = [];
   renderStatusTable();
   renderHistoryTable();
+
+  const pwdInput = document.getElementById('loginPasswordInput');
+  if (pwdInput) pwdInput.value = '';
+
   showLoginModal();
 }
+
+async function applyHiddenLeaveTypes() {
+  try {
+    const res = await fetch(`${API_BASE}/settings/hidden-leave-types`);
+    if (!res.ok) return;
+    const data = await res.json();
+    hiddenLeaveTypes = Array.isArray(data.hidden) ? data.hidden : [];
+  } catch (_) {
+    hiddenLeaveTypes = [];
+  }
+
+  document.querySelectorAll('.dropdown-item').forEach(el => {
+    const key = el.getAttribute('data-leave-type');
+    if (hiddenLeaveTypes.includes(key)) {
+      el.style.display = 'none';
+      el.setAttribute('data-hidden', '1');
+    } else {
+      el.style.display = '';
+      el.removeAttribute('data-hidden');
+    }
+  });
+}
+
+// ================= MOBILE SIDEBAR DRAWER =================
+
+function openSidebarDrawer() {
+  const sidebar = document.querySelector('.sidebar');
+  const backdrop = document.getElementById('sidebarBackdrop');
+  if (!sidebar) return;
+  sidebar.classList.add('open');
+  if (backdrop) backdrop.classList.add('show');
+}
+
+function closeSidebarDrawer() {
+  const sidebar = document.querySelector('.sidebar');
+  const backdrop = document.getElementById('sidebarBackdrop');
+  if (!sidebar) return;
+  sidebar.classList.remove('open');
+  if (backdrop) backdrop.classList.remove('show');
+}
+
+function toggleSidebarDrawer() {
+  const sidebar = document.querySelector('.sidebar');
+  if (!sidebar) return;
+  if (sidebar.classList.contains('open')) closeSidebarDrawer();
+  else openSidebarDrawer();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const hamburgerBtn = document.getElementById('hamburgerBtn');
+  const backdrop = document.getElementById('sidebarBackdrop');
+
+  if (hamburgerBtn) hamburgerBtn.addEventListener('click', toggleSidebarDrawer);
+  if (backdrop) backdrop.addEventListener('click', closeSidebarDrawer);
+
+  // Auto-close the drawer when a nav item is picked (mobile only)
+  document.querySelectorAll('.sidebar .nav-item, .sidebar .dropdown-item').forEach(el => {
+    el.addEventListener('click', () => {
+      if (window.matchMedia('(max-width: 767px)').matches) {
+        closeSidebarDrawer();
+      }
+    });
+  });
+
+  // If the user rotates their phone or resizes past mobile, close the drawer
+  window.addEventListener('resize', () => {
+    if (window.innerWidth > 767) closeSidebarDrawer();
+  });
+
+  // Escape key also closes it
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeSidebarDrawer();
+  });
+});
 
 // ============================================================
 // MY ATTENDANCE — STAFF SELF-SERVICE
@@ -2042,6 +2205,370 @@ document.addEventListener('DOMContentLoaded', () => {
       loadMyAttendanceRecord();
     });
   }
+});
+
+// ================= MOBILE SIDEBAR DRAWER =================
+
+function openSidebarDrawer() {
+  const sidebar = document.querySelector('.sidebar');
+  const backdrop = document.getElementById('sidebarBackdrop');
+  if (!sidebar) return;
+  sidebar.classList.add('open');
+  if (backdrop) backdrop.classList.add('show');
+}
+
+function closeSidebarDrawer() {
+  const sidebar = document.querySelector('.sidebar');
+  const backdrop = document.getElementById('sidebarBackdrop');
+  if (!sidebar) return;
+  sidebar.classList.remove('open');
+  if (backdrop) backdrop.classList.remove('show');
+}
+
+function toggleSidebarDrawer() {
+  const sidebar = document.querySelector('.sidebar');
+  if (!sidebar) return;
+  if (sidebar.classList.contains('open')) closeSidebarDrawer();
+  else openSidebarDrawer();
+}
+
+// ============================================================
+// RELIEVING OFFICER AUTOCOMPLETE
+// ============================================================
+
+let selectedRelievingOfficer = null;   // { name, file_no, department }
+let _relievingSearchTimer = null;
+
+function wireRelievingOfficerAutocomplete() {
+  const input = document.getElementById('relievingOfficerInput');
+  const dropdown = document.getElementById('relievingOfficerDropdown');
+  if (!input || !dropdown) return;
+
+  input.addEventListener('input', () => {
+    const q = input.value.trim();
+    // Any typing clears a previously picked officer until they re-pick.
+    selectedRelievingOfficer = null;
+
+    if (q.length < 2) {
+      dropdown.style.display = 'none';
+      return;
+    }
+    if (_relievingSearchTimer) clearTimeout(_relievingSearchTimer);
+    _relievingSearchTimer = setTimeout(() => runRelievingSearch(q), 220);
+  });
+
+  input.addEventListener('blur', () => {
+    // Delay so a click on a dropdown item still fires.
+    setTimeout(() => { dropdown.style.display = 'none'; }, 200);
+  });
+
+  input.addEventListener('focus', () => {
+    if (input.value.trim().length >= 2 && !selectedRelievingOfficer) {
+      runRelievingSearch(input.value.trim());
+    }
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!dropdown.contains(e.target) && e.target !== input) {
+      dropdown.style.display = 'none';
+    }
+  });
+}
+
+async function runRelievingSearch(q) {
+  const dropdown = document.getElementById('relievingOfficerDropdown');
+  if (!dropdown) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/staff-directory/search?q=${encodeURIComponent(q)}`);
+    if (!res.ok) throw new Error('Search failed.');
+    const rows = await res.json();
+
+    if (!rows || rows.length === 0) {
+      dropdown.innerHTML = `<div class="autocomplete-empty">No staff match "${q}".</div>`;
+      dropdown.style.display = 'block';
+      return;
+    }
+
+    dropdown.innerHTML = rows.map(r => `
+      <div class="autocomplete-item"
+           onclick="pickRelievingOfficer('${String(r.isse_file_no).replace(/'/g, "\\'")}', '${String(r.full_name).replace(/'/g, "\\'")}', '${String(r.department || '').replace(/'/g, "\\'")}')">
+        <div class="ac-name">${r.full_name}</div>
+        <div class="ac-meta">
+          <span class="ac-file">${r.isse_file_no}</span>
+          <span>${r.department || 'No Dept'}</span>
+        </div>
+      </div>
+    `).join('');
+    dropdown.style.display = 'block';
+  } catch (err) {
+    dropdown.innerHTML = `<div class="autocomplete-empty">Search failed.</div>`;
+    dropdown.style.display = 'block';
+  }
+}
+
+function pickRelievingOfficer(fileNo, name, department) {
+  const input = document.getElementById('relievingOfficerInput');
+  const dropdown = document.getElementById('relievingOfficerDropdown');
+  if (!input || !dropdown) return;
+
+  selectedRelievingOfficer = { name, file_no: fileNo, department };
+  input.value = `${name} (${fileNo})`;
+  dropdown.style.display = 'none';
+}
+
+function clearRelievingOfficer() {
+  selectedRelievingOfficer = null;
+  const input = document.getElementById('relievingOfficerInput');
+  if (input) input.value = '';
+}
+
+// ============================================================
+// STAFF NOTIFICATIONS (bell dropdown)
+// ============================================================
+
+function refreshStaffNotifBadge() {
+  if (!currentStaff || !currentStaff.isse_file_no) return;
+  fetch(`${API_BASE}/staff-notifications/${encodeURIComponent(currentStaff.isse_file_no)}/unread-count`)
+    .then(r => r.ok ? r.json() : { count: 0 })
+    .then(data => {
+      const badge = document.getElementById('staffNotifBadge');
+      if (!badge) return;
+      const c = data && data.count ? data.count : 0;
+      if (c > 0) {
+        badge.textContent = c > 99 ? '99+' : c;
+        badge.style.display = 'inline-block';
+      } else {
+        badge.style.display = 'none';
+      }
+    })
+    .catch(() => {});
+}
+
+function toggleStaffNotifDropdown(event) {
+  if (event) event.stopPropagation();
+  const dd = document.getElementById('staffNotifDropdown');
+  if (!dd) return;
+  const isOpen = dd.style.display === 'flex';
+  if (isOpen) {
+    dd.style.display = 'none';
+  } else {
+    dd.style.display = 'flex';
+    loadStaffNotifDropdown();
+  }
+}
+
+function loadStaffNotifDropdown() {
+  if (!currentStaff || !currentStaff.isse_file_no) return;
+  const list = document.getElementById('staffNotifDropdownList');
+  if (!list) return;
+
+  list.innerHTML = '<div class="notif-empty">Loading...</div>';
+
+  fetch(`${API_BASE}/staff-notifications/${encodeURIComponent(currentStaff.isse_file_no)}`)
+    .then(r => r.ok ? r.json() : [])
+    .then(items => {
+      items = items || [];
+      const unread = items.filter(n => !n.is_read).length;
+      const badge = document.getElementById('staffNotifBadge');
+      if (badge) {
+        if (unread > 0) { badge.textContent = unread; badge.style.display = 'inline-block'; }
+        else badge.style.display = 'none';
+      }
+
+      if (items.length === 0) {
+        list.innerHTML = '<div class="notif-empty">No notifications yet.</div>';
+      } else {
+        list.innerHTML = items.map(n => `
+          <div class="notif-item ${n.is_read ? '' : 'unread'}"
+               onclick="openStaffNotification(${n.id}, '${String(n.link_section || '').replace(/'/g, "\\'")}')">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;">
+              <div style="flex: 1; min-width: 0;">
+                <div class="notif-item-title">${n.title || 'Notification'}</div>
+                <div class="notif-item-msg">${n.message || ''}</div>
+                <div class="notif-item-time">${formatNotifTime(n.created_at)}</div>
+              </div>
+              <button class="notif-delete-btn"
+                      title="Delete notification"
+                      onclick="event.stopPropagation(); deleteStaffNotification(${n.id})">🗑️</button>
+            </div>
+          </div>
+        `).join('');
+      }
+
+      const cnt = document.getElementById('staffNotifCountText');
+      if (cnt) {
+        cnt.textContent = items.length === 0
+          ? 'No notifications'
+          : `Showing ${items.length} of ${items.length}`;
+      }
+    })
+    .catch(() => {
+      list.innerHTML = '<div class="notif-empty">Failed to load notifications.</div>';
+    });
+}
+
+// Generic custom-styled confirm dialog (replaces native confirm()).
+let _staffConfirmCallback = null;
+
+function showStaffConfirm(title, message, yesLabel, onConfirm) {
+  const modal = document.getElementById('staffConfirmModal');
+  const titleEl = document.getElementById('staffConfirmTitle');
+  const msgEl = document.getElementById('staffConfirmMessage');
+  const yesBtn = document.getElementById('staffConfirmYesBtn');
+  if (!modal || !yesBtn) {
+    // Fallback if the modal is somehow missing
+    if (window.confirm(message)) onConfirm && onConfirm();
+    return;
+  }
+
+  if (titleEl) titleEl.textContent = title || 'Confirm Action';
+  if (msgEl) msgEl.textContent = message || '';
+  yesBtn.textContent = yesLabel || 'Confirm';
+  _staffConfirmCallback = onConfirm;
+
+  yesBtn.onclick = () => {
+    const cb = _staffConfirmCallback;
+    closeStaffConfirmModal();
+    if (cb) cb();
+  };
+
+  modal.style.display = 'flex';
+}
+
+function closeStaffConfirmModal() {
+  const modal = document.getElementById('staffConfirmModal');
+  if (modal) modal.style.display = 'none';
+  _staffConfirmCallback = null;
+}
+
+// Delete a single staff notification
+function deleteStaffNotification(id) {
+  showStaffConfirm(
+    'Delete Notification',
+    'Delete this notification? This cannot be undone.',
+    'Delete',
+    () => {
+      fetch(`${API_BASE}/staff-notifications/${id}`, { method: 'DELETE' })
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(() => {
+          loadStaffNotifDropdown();
+          refreshStaffNotifBadge();
+        })
+        .catch(() => alert('Could not delete the notification.'));
+    }
+  );
+}
+
+// Wipe every notification for this staff member
+function clearAllStaffNotifications(event) {
+  if (event) event.stopPropagation();
+  if (!currentStaff || !currentStaff.isse_file_no) return;
+
+  showStaffConfirm(
+    'Clear All Notifications',
+    'Delete ALL your notifications? This cannot be undone.',
+    'Delete All',
+    () => {
+      fetch(`${API_BASE}/staff-notifications/all/${encodeURIComponent(currentStaff.isse_file_no)}`, {
+        method: 'DELETE'
+      })
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(() => {
+          loadStaffNotifDropdown();
+          refreshStaffNotifBadge();
+        })
+        .catch(() => alert('Could not clear notifications.'));
+    }
+  );
+}
+
+function openStaffNotification(id, linkSection) {
+  fetch(`${API_BASE}/staff-notifications/${id}/read`, { method: 'PATCH' })
+    .finally(() => {
+      const dd = document.getElementById('staffNotifDropdown');
+      if (dd) dd.style.display = 'none';
+      refreshStaffNotifBadge();
+      // Route to the linked section if we can
+      if (linkSection && document.getElementById(linkSection)) {
+        showSection(linkSection);
+      }
+    });
+}
+
+function markAllStaffNotificationsRead(event) {
+  if (event) event.stopPropagation();
+  if (!currentStaff || !currentStaff.isse_file_no) return;
+  fetch(`${API_BASE}/staff-notifications/${encodeURIComponent(currentStaff.isse_file_no)}`)
+    .then(r => r.ok ? r.json() : [])
+    .then(items => {
+      const unread = (items || []).filter(n => !n.is_read);
+      return Promise.all(unread.map(n =>
+        fetch(`${API_BASE}/staff-notifications/${n.id}/read`, { method: 'PATCH' })
+      ));
+    })
+    .then(() => loadStaffNotifDropdown())
+    .catch(() => {});
+}
+
+// Time formatter used by both staff and admin dropdowns.
+if (typeof formatNotifTime !== 'function') {
+  window.formatNotifTime = function (ts) {
+    if (!ts) return '';
+    try {
+      const d = new Date(ts);
+      if (isNaN(d.getTime())) return '';
+      const diffMs = Date.now() - d.getTime();
+      const mins = Math.floor(diffMs / 60000);
+      if (mins < 1) return 'Just now';
+      if (mins < 60) return `${mins}m ago`;
+      const hrs = Math.floor(mins / 60);
+      if (hrs < 24) return `${hrs}h ago`;
+      const days = Math.floor(hrs / 24);
+      if (days < 7) return `${days}d ago`;
+      return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    } catch (_) { return ''; }
+  };
+}
+
+// Close the staff notif dropdown when clicking outside it
+document.addEventListener('click', function (e) {
+  const dd = document.getElementById('staffNotifDropdown');
+  const bell = document.getElementById('staffNotifBellBtn');
+  if (!dd || dd.style.display !== 'flex') return;
+  if (bell && bell.contains(e.target)) return;
+  if (dd.contains(e.target)) return;
+  dd.style.display = 'none';
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+  const hamburgerBtn = document.getElementById('hamburgerBtn');
+  const backdrop = document.getElementById('sidebarBackdrop');
+
+  if (hamburgerBtn) hamburgerBtn.addEventListener('click', toggleSidebarDrawer);
+  if (backdrop) backdrop.addEventListener('click', closeSidebarDrawer);
+
+  // Auto-close the drawer when a nav item is picked (mobile only)
+  document.querySelectorAll('.sidebar .nav-item, .sidebar .dropdown-item').forEach(el => {
+    el.addEventListener('click', () => {
+      if (window.matchMedia('(max-width: 767px)').matches) {
+        closeSidebarDrawer();
+      }
+    });
+  });
+
+  // If the user rotates their phone or resizes past mobile, close the drawer
+  window.addEventListener('resize', () => {
+    if (window.innerWidth > 767) closeSidebarDrawer();
+  });
+
+  // Escape key also closes it
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeSidebarDrawer();
+  });
+
+  // Relieving Officer autocomplete
+  wireRelievingOfficerAutocomplete();
 });
 
 // ============================================================

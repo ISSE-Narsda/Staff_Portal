@@ -37,6 +37,22 @@ const LEAVE_DAYS_MAP = {
   'Sabbatical Leave (1 Year)': 365
 };
 
+// Canonical list of leave types shown in the staff-portal dropdown.
+// These are the exact `data-leave-type` values from index.html.
+// The Super Admin can hide any of these via System Settings.
+const ALL_LEAVE_TYPES = [
+  { key: 'Annual Leave',                    label: 'Annual Leave' },
+  { key: 'Maternity Leave (112 Working Days)', label: 'Maternity Leave' },
+  { key: 'Paternity Leave (14 Working Days)',  label: 'Paternity Leave' },
+  { key: 'Sick Leave (Up to 42 Days)',      label: 'Sick Leave' },
+  { key: 'Casual Leave (5-7 Days)',         label: 'Casual Leave' },
+  { key: 'Study Leave',                     label: 'Study Leave' },
+  { key: 'Pre-retirement Leave (3 Months)', label: 'Pre-retirement Leave' },
+  { key: 'Sabbatical Leave (1 Year)',       label: 'Sabbatical Leave' },
+  { key: 'Custom Leave',                    label: 'Custom Leave' },
+  { key: 'Demo Leave (Minutes)',            label: 'Demo Leave (Testing)' }
+];
+
 // Resolve required working days for a given leave type.
 // 1) Exact map hit.
 // 2) Parse "(N Working Days)" out of the type string.
@@ -53,6 +69,16 @@ function parseWorkingDaysFromType(leaveType) {
   if (daysMatch) return parseInt(daysMatch[1], 10);
 
   return 1;
+}
+
+// Generates a fresh staff password of the form Isse-XXXX-XXXX.
+// Excludes look-alike characters (0/O, 1/l/I) so it's easy to read
+// aloud or copy by hand.
+function generateStaffPassword() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  const pick = () => chars[Math.floor(Math.random() * chars.length)];
+  const block = () => Array.from({ length: 4 }, pick).join('');
+  return `Isse-${block()}-${block()}`;
 }
 
 const PUBLIC_HOLIDAYS = new Set([
@@ -441,8 +467,10 @@ app.post('/api/admin/heartbeat', (req, res) => {
 });
 
 app.post('/api/auth/staff-login', (req, res) => {
-  const { isseFileNo } = req.body;
-  if (!isseFileNo) return res.status(400).json({ error: 'ISSE File Number is required.' });
+  const { isseFileNo, password } = req.body;
+  if (!isseFileNo || !password) {
+    return res.status(400).json({ error: 'ISSE File Number and Password are required.' });
+  }
 
   const query = `SELECT * FROM staff_profiles WHERE LOWER(isse_file_no) = LOWER(?)`;
   db.get(query, [isseFileNo.trim()], (err, staff) => {
@@ -451,8 +479,58 @@ app.post('/api/auth/staff-login', (req, res) => {
       return res.status(500).json({ error: 'Internal server error.' });
     }
     if (!staff) return res.status(404).json({ error: 'ISSE File Number not found in database.' });
-    res.json({ message: 'Login successful', staff });
+
+    if (!staff.password || String(staff.password).trim() === '') {
+      return res.status(403).json({
+        error: 'Your account does not have a password yet. Please contact the Super Admin to set one up.'
+      });
+    }
+
+    if (String(staff.password) !== String(password)) {
+      return res.status(401).json({ error: 'Incorrect password. Please try again.' });
+    }
+
+    // Never send the password back to the client.
+    const { password: _ignored, ...safeStaff } = staff;
+    res.json({ message: 'Login successful', staff: safeStaff });
   });
+});
+
+// Staff changes their own password from their portal.
+app.post('/api/auth/staff-change-password', (req, res) => {
+  const { isseFileNo, currentPassword, newPassword } = req.body || {};
+
+  if (!isseFileNo || !currentPassword || !newPassword) {
+    return res.status(400).json({ error: 'File Number, current password, and new password are required.' });
+  }
+  if (String(newPassword).length < 4) {
+    return res.status(400).json({ error: 'New password must be at least 4 characters.' });
+  }
+
+  db.get(
+    `SELECT id, password FROM staff_profiles WHERE LOWER(isse_file_no) = LOWER(?)`,
+    [String(isseFileNo).trim()],
+    (err, staff) => {
+      if (err) return res.status(500).json({ error: err.message });
+      if (!staff) return res.status(404).json({ error: 'Staff record not found.' });
+      if (!staff.password) {
+        return res.status(403).json({ error: 'No password is set for this account. Contact the Super Admin.' });
+      }
+      if (String(staff.password) !== String(currentPassword)) {
+        return res.status(401).json({ error: 'Current password is incorrect.' });
+      }
+
+      db.run(
+        `UPDATE staff_profiles SET password = ? WHERE id = ?`,
+        [String(newPassword), staff.id],
+        function (uErr) {
+          if (uErr) return res.status(500).json({ error: uErr.message });
+          logAudit(isseFileNo, 'Staff', 'STAFF_PASSWORD_CHANGED', staff.id, 'Staff changed their own password');
+          res.json({ message: 'Password updated successfully.' });
+        }
+      );
+    }
+  );
 });
 
 app.post('/api/auth/admin-login', (req, res) => {
@@ -783,18 +861,20 @@ app.put('/api/admin/profile/:id', (req, res) => {
 
 app.post('/api/admin/staff', requireAuth, requireWorkflow('unit'), (req, res) => {
   const { isseFileNo, fullName, department, designation, gradeLevel, officialEmail, gender,
-          lastPromotionDate, nextPromotionDate } = req.body;
+          lastPromotionDate, nextPromotionDate, password } = req.body;
 
   const deptFilter = departmentFilterFor(req);
   if (deptFilter && department && department.toLowerCase() !== deptFilter.toLowerCase()) {
     return res.status(403).json({ error: 'You can only register staff in your own department.' });
   }
 
+  const finalPassword = (password && String(password).trim() !== '') ? String(password) : null;
+
   db.run(
-    `INSERT INTO staff_profiles (isse_file_no, full_name, department, designation, grade_level, official_email, gender, last_promotion_date, next_promotion_date)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO staff_profiles (isse_file_no, full_name, department, designation, grade_level, official_email, gender, last_promotion_date, next_promotion_date, password)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [isseFileNo, fullName, department, designation, gradeLevel, officialEmail || null, gender || 'Male',
-     lastPromotionDate || null, nextPromotionDate || null],
+     lastPromotionDate || null, nextPromotionDate || null, finalPassword],
     function (err) {
       if (err) return res.status(400).json({ error: 'Staff File Number or Email already exists.' });
       logAudit(req.authUser.username, req.authContext.role.title, 'STAFF_PROFILE_CREATED', this.lastID, `Created staff profile for ${fullName}`);
@@ -805,7 +885,7 @@ app.post('/api/admin/staff', requireAuth, requireWorkflow('unit'), (req, res) =>
 
 app.get('/api/admin/staff', requireAuth, (req, res) => {
   const deptFilter = departmentFilterFor(req);
-  let sql = `SELECT * FROM staff_profiles`;
+  let sql = `SELECT *, (password IS NOT NULL AND password != '') AS has_password FROM staff_profiles`;
   let params = [];
   if (deptFilter) {
     sql += ` WHERE LOWER(department) = LOWER(?)`;
@@ -911,10 +991,11 @@ app.post('/api/admin/staff/bulk', requireAuth, requireWorkflow('unit'), (req, re
     }
 
     const s = staffList[index];
+    const rowPassword = (s.password && String(s.password).trim() !== '') ? String(s.password) : null;
     db.run(
-      `INSERT INTO staff_profiles (isse_file_no, full_name, department, designation, grade_level, official_email, gender)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [s.isseFileNo, s.fullName, s.department, s.designation, s.gradeLevel, s.officialEmail || null, s.gender || 'Male'],
+      `INSERT INTO staff_profiles (isse_file_no, full_name, department, designation, grade_level, official_email, gender, password)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [s.isseFileNo, s.fullName, s.department, s.designation, s.gradeLevel, s.officialEmail || null, s.gender || 'Male', rowPassword],
       function (err) {
         if (err) {
           console.error('Bulk insert error on row', index, ':', err.message);
@@ -930,6 +1011,106 @@ app.post('/api/admin/staff/bulk', requireAuth, requireWorkflow('unit'), (req, re
 
   insertNext(0);
 });
+
+// ==========================================
+// 3b-2. STAFF PASSWORD MANAGEMENT (Super Admin only)
+// ==========================================
+// Both endpoints require the Super Admin to re-enter their OWN
+// login password as a secondary confirmation before performing
+// the action.
+
+// Reveal the plaintext password of a staff member.
+// Body: { adminPassword? }
+//   - If adminPassword is provided, it's verified against the
+//     Super Admin's own login password (used by the table-cell
+//     reveal button for a second confirmation).
+//   - If it's omitted, the action proceeds without that check
+//     (used by the View Profile modal, per the supervisor's request).
+app.post('/api/admin/staff/:id/reveal-password',
+  requireAuth, requireWorkflow('full'),
+  (req, res) => {
+    const { adminPassword } = req.body || {};
+
+    const proceed = () => {
+      db.get(`SELECT id, password FROM staff_profiles WHERE id = ?`, [req.params.id], (sErr, staff) => {
+        if (sErr) return res.status(500).json({ error: sErr.message });
+        if (!staff) return res.status(404).json({ error: 'Staff record not found.' });
+        if (!staff.password) {
+          return res.status(404).json({ error: 'No password is set for this staff member yet.' });
+        }
+
+        logAudit(req.authUser.username, req.authContext.role.title,
+          'STAFF_PASSWORD_REVEALED', staff.id, 'Super Admin revealed a staff password');
+        res.json({ password: staff.password });
+      });
+    };
+
+    if (!adminPassword) return proceed();
+
+    db.get(`SELECT password FROM users WHERE id = ?`, [req.authUser.id], (err, admin) => {
+      if (err) return res.status(500).json({ error: err.message });
+      if (!admin) return res.status(404).json({ error: 'Admin user not found.' });
+      if (String(admin.password) !== String(adminPassword)) {
+        return res.status(401).json({ error: 'Incorrect admin password.' });
+      }
+      proceed();
+    });
+  }
+);
+
+// Set or regenerate a staff member's password.
+// Body: { adminPassword?, newPassword? }
+//   - adminPassword: optional. When provided, verified.
+//   - newPassword: if provided and non-empty → sets it (min 4 chars);
+//                  otherwise → auto-generates a random password.
+app.patch('/api/admin/staff/:id/password',
+  requireAuth, requireWorkflow('full'),
+  (req, res) => {
+    const { adminPassword, newPassword } = req.body || {};
+
+    const proceed = () => {
+      let finalPassword;
+      let mode;
+      if (newPassword && String(newPassword).trim() !== '') {
+        if (String(newPassword).length < 4) {
+          return res.status(400).json({ error: 'New password must be at least 4 characters.' });
+        }
+        finalPassword = String(newPassword);
+        mode = 'set';
+      } else {
+        finalPassword = generateStaffPassword();
+        mode = 'regenerate';
+      }
+
+      db.run(
+        `UPDATE staff_profiles SET password = ? WHERE id = ?`,
+        [finalPassword, req.params.id],
+        function (uErr) {
+          if (uErr) return res.status(500).json({ error: uErr.message });
+          if (!this.changes) return res.status(404).json({ error: 'Staff record not found.' });
+
+          logAudit(req.authUser.username, req.authContext.role.title,
+            mode === 'set' ? 'STAFF_PASSWORD_SET' : 'STAFF_PASSWORD_REGENERATED',
+            req.params.id,
+            mode === 'set' ? 'Super Admin set a staff password' : 'Super Admin regenerated a staff password');
+
+          res.json({ message: 'Password updated.', password: finalPassword });
+        }
+      );
+    };
+
+    if (!adminPassword) return proceed();
+
+    db.get(`SELECT password FROM users WHERE id = ?`, [req.authUser.id], (err, admin) => {
+      if (err) return res.status(500).json({ error: err.message });
+      if (!admin) return res.status(404).json({ error: 'Admin user not found.' });
+      if (String(admin.password) !== String(adminPassword)) {
+        return res.status(401).json({ error: 'Incorrect admin password.' });
+      }
+      proceed();
+    });
+  }
+);
 
 // ==========================================
 // 3c. DELETE ALL STAFF (Super Admin only)
@@ -1160,25 +1341,66 @@ app.get('/api/leave/annual-status/:fileNo', (req, res) => {
 
 app.post('/api/leave/apply', (req, res) => {
   const { isseFileNo, fullName, department, designation, startDate, endDate, totalDays, remarks, attachmentId } = req.body;
+  const relievingOfficerName = req.body.relievingOfficerName ? String(req.body.relievingOfficerName).trim() : null;
+  const relievingOfficerFileNo = req.body.relievingOfficerFileNo ? String(req.body.relievingOfficerFileNo).trim() : null;
+  const relievingOfficerDepartment = req.body.relievingOfficerDepartment ? String(req.body.relievingOfficerDepartment).trim() : null;
   let leaveType = req.body.leaveType;
   if (!isseFileNo || !startDate || !endDate || !leaveType) {
     return res.status(400).json({ error: 'Please provide all required application fields.' });
   }
+
+  // Reject hidden leave types (client hides them from the dropdown;
+  // this stops a stale/malicious client from slipping one through).
+  db.get(
+    `SELECT setting_value FROM system_settings WHERE setting_key = 'hidden_leave_types'`,
+    [],
+    (hiddenErr, hiddenRow) => {
+      let hiddenList = [];
+      if (!hiddenErr && hiddenRow && hiddenRow.setting_value) {
+        try { hiddenList = JSON.parse(hiddenRow.setting_value); } catch (_) { hiddenList = []; }
+      }
+      if (!Array.isArray(hiddenList)) hiddenList = [];
+
+      // Demo Leave bypasses this check so testing still works during development.
+      const isDemo = leaveType.includes('Demo Leave');
+      if (!isDemo && hiddenList.includes(leaveType)) {
+        return res.status(400).json({ error: 'This leave type is not currently offered. Please pick another.' });
+      }
+
+      // Continue with the original logic. Everything below
+      // (Demo branch, working-day calc, insert, etc.) goes inside
+      // this callback.
+      handleLeaveApply();
+    }
+  );
+
+  function handleLeaveApply() {
 
   // === DEMO LEAVE INTERCEPT ===
   // Bypass all working-day calculations and annual leave rules for testing
   if (leaveType.includes('Demo Leave')) {
     const todayStr = toDateString(new Date());
     db.run(
-      `INSERT INTO leave_requests (isse_file_no, full_name, department, designation, leave_type, start_date, end_date, total_days, staff_remarks)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [isseFileNo, fullName, department, designation, leaveType, todayStr, todayStr, String(totalDays || '0 Minutes'), remarks || null],
+      `INSERT INTO leave_requests (isse_file_no, full_name, department, designation, leave_type, start_date, end_date, total_days, staff_remarks, relieving_officer_name, relieving_officer_file_no, relieving_officer_department)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [isseFileNo, fullName, department, designation, leaveType, todayStr, todayStr, String(totalDays || '0 Minutes'), remarks || null,
+       relievingOfficerName, relievingOfficerFileNo, relievingOfficerDepartment],
       function (err) {
         if (err) return res.status(500).json({ error: err.message });
         const newId = this.lastID;
         const finish = () => {
           logAudit(fullName, 'Staff', 'LEAVE_APPLICATION_SUBMITTED', newId, `Filed ${leaveType}`);
           createNotification('hou', department, 'New Leave Application', `Staff member ${fullName} (${department}) filed a new ${leaveType} request.`, 'houQueueSection', newId);
+          if (relievingOfficerFileNo && String(relievingOfficerFileNo).toLowerCase() !== String(isseFileNo).toLowerCase()) {
+            createNotification(
+              'staff',
+              relievingOfficerFileNo,
+              'Relieving Officer Assignment',
+              `You have been assigned as relieving officer for ${fullName} (${department}) for their ${leaveType}.`,
+              'statusSection',
+              newId
+            );
+          }
           res.json({ message: 'Demo Leave application submitted successfully', id: newId });
         };
 
@@ -1208,9 +1430,10 @@ app.post('/api/leave/apply', (req, res) => {
   // Moved the insert logic to accept calculated parameters since we need grade level first
   const insertLeave = (finalLeaveType, finalAdjustedEndStr, finalTotalWorkingDays) => {
     db.run(
-      `INSERT INTO leave_requests (isse_file_no, full_name, department, designation, leave_type, start_date, end_date, total_days, staff_remarks)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [isseFileNo, fullName, department, designation, finalLeaveType, adjustedStartStr, finalAdjustedEndStr, String(finalTotalWorkingDays), remarks || null],
+      `INSERT INTO leave_requests (isse_file_no, full_name, department, designation, leave_type, start_date, end_date, total_days, staff_remarks, relieving_officer_name, relieving_officer_file_no, relieving_officer_department)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [isseFileNo, fullName, department, designation, finalLeaveType, adjustedStartStr, finalAdjustedEndStr, String(finalTotalWorkingDays), remarks || null,
+       relievingOfficerName, relievingOfficerFileNo, relievingOfficerDepartment],
       function (err) {
         if (err) return res.status(500).json({ error: err.message });
         const newId = this.lastID;
@@ -1219,6 +1442,16 @@ app.post('/api/leave/apply', (req, res) => {
             `Filed ${finalLeaveType} (${finalTotalWorkingDays} working days) from ${adjustedStartStr} to ${finalAdjustedEndStr}`);
           createNotification('hou', department, 'New Leave Application',
             `Staff member ${fullName} (${department}) filed a new ${finalLeaveType} request.`, 'houQueueSection', newId);
+          if (relievingOfficerFileNo && String(relievingOfficerFileNo).toLowerCase() !== String(isseFileNo).toLowerCase()) {
+            createNotification(
+              'staff',
+              relievingOfficerFileNo,
+              'Relieving Officer Assignment',
+              `You have been assigned as relieving officer for ${fullName} (${department}) for their ${finalLeaveType}.`,
+              'statusSection',
+              newId
+            );
+          }
           res.json({ message: 'Leave application submitted successfully', id: newId });
         };
 
@@ -1383,6 +1616,32 @@ app.post('/api/leave/apply', (req, res) => {
       insertLeave(leaveType, adjustedEndStr, totalWorkingDays);
     });
   });
+
+  }  // end of handleLeaveApply
+});  // end of app.post('/api/leave/apply')
+
+// ==========================================
+// STAFF DIRECTORY SEARCH (public, staff-portal autocomplete)
+// ==========================================
+// Returns up to 10 matching staff across all departments.
+// Only exposes name, file no, department — nothing sensitive.
+app.get('/api/staff-directory/search', (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (!q || q.length < 2) return res.json([]);
+
+  db.all(
+    `SELECT isse_file_no, full_name, department
+       FROM staff_profiles
+      WHERE LOWER(full_name) LIKE LOWER(?)
+         OR LOWER(isse_file_no) LIKE LOWER(?)
+      ORDER BY full_name ASC
+      LIMIT 10`,
+    [`%${q}%`, `%${q}%`],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json(rows || []);
+    }
+  );
 });
 
 app.get('/api/leave/staff-history/:fileNo', (req, res) => {
@@ -1467,8 +1726,8 @@ app.patch('/api/leave/hou-action', requireAuth, requireWorkflow('unit'), (req, r
 
   const deptFilter = departmentFilterFor(req);
   const guardSql = deptFilter
-    ? `SELECT id FROM leave_requests WHERE id = $1 AND LOWER(department) = LOWER($2)`
-    : `SELECT id FROM leave_requests WHERE id = $1`;
+    ? `SELECT id, isse_file_no, full_name, department, leave_type, relieving_officer_file_no FROM leave_requests WHERE id = $1 AND LOWER(department) = LOWER($2)`
+    : `SELECT id, isse_file_no, full_name, department, leave_type, relieving_officer_file_no FROM leave_requests WHERE id = $1`;
   const guardParams = deptFilter ? [requestId, deptFilter] : [requestId];
 
   db.get(guardSql, guardParams, (guardErr, found) => {
@@ -1482,12 +1741,46 @@ app.patch('/api/leave/hou-action', requireAuth, requireWorkflow('unit'), (req, r
         if (err) return res.status(500).json({ error: err.message });
         logAudit(req.authUser.username, req.authContext.role.title, isApproved ? 'HOU_ENDORSED' : 'HOU_REJECTED', requestId,
           isApproved ? 'HOU endorsed leave application' : `HOU rejected leave application: ${finalRemarks}`);
+
+        // Notify the APPLICANT on their staff-portal bell.
+        if (found.isse_file_no) {
+          if (isApproved) {
+            createNotification(
+              'staff',
+              found.isse_file_no,
+              'Leave Endorsed by HOU',
+              `Your ${found.leave_type} application (#LA-${requestId}) has been endorsed by your Head of Unit and is now awaiting final approval from the Head of Administration.`,
+              'statusSection',
+              requestId
+            );
+          } else {
+            createNotification(
+              'staff',
+              found.isse_file_no,
+              'Leave Rejected by HOU',
+              `Your ${found.leave_type} application (#LA-${requestId}) was rejected by your Head of Unit. Reason: ${finalRemarks || 'Not specified.'}`,
+              'statusSection',
+              requestId
+            );
+          }
+        }
+
         if (isApproved) {
           createNotification('hoa', 'all', 'Leave Awaiting HOA Clearance',
             `Leave application #${requestId} endorsed by HOU and awaiting Head of Admin approval.`, 'adminQueueSection', requestId);
+        } else {
+          // Rejected — tell the relieving officer they're no longer needed.
+          if (found.relieving_officer_file_no) {
+            createNotification(
+              'staff',
+              found.relieving_officer_file_no,
+              'Relieving Assignment Cancelled',
+              `${found.full_name} (${found.department || 'No Dept'})'s ${found.leave_type} was rejected by their Head of Unit. You are no longer needed as relieving officer.`,
+              'statusSection',
+              requestId
+            );
+          }
         }
-        // Clear the HOU-side "New Leave Application" notification for this request,
-        // whether the action was an endorsement or a rejection.
         markNotificationsReadForRequest(requestId, 'hou');
         res.json({ message: isApproved ? 'Application endorsed and approved by HOU.' : 'Application rejected by HOU.' });
       }
@@ -1501,15 +1794,59 @@ app.patch('/api/leave/admin-action', requireAuth, requireWorkflow('final'), (req
   const overall = isApproved ? 'HEAD OF ADMIN APPROVED' : 'REJECTED BY ADMIN';
   const finalRemarks = isApproved ? '' : (remarks || 'Rejected by Head of Administration');
 
-  db.run(
-    `UPDATE leave_requests SET admin_status = ?, admin_remarks = ?, overall_status = ? WHERE id = ?`,
-    [status, finalRemarks, overall, requestId],
-    function (err) {
-      if (err) return res.status(500).json({ error: err.message });
-      logAudit(req.authUser.username, req.authContext.role.title, isApproved ? 'ADMIN_APPROVED' : 'ADMIN_REJECTED', requestId,
-        isApproved ? 'Head of Admin granted final clearance' : `Head of Admin rejected application: ${finalRemarks}`);
-      markNotificationsReadForRequest(requestId, 'hoa');
-      res.json({ message: isApproved ? 'Application granted final approval by Head of Admin.' : 'Application rejected by Head of Admin.' });
+  db.get(
+    `SELECT isse_file_no, full_name, department, leave_type, relieving_officer_file_no FROM leave_requests WHERE id = ?`,
+    [requestId],
+    (lookupErr, leave) => {
+      if (lookupErr) return res.status(500).json({ error: lookupErr.message });
+
+      db.run(
+        `UPDATE leave_requests SET admin_status = ?, admin_remarks = ?, overall_status = ? WHERE id = ?`,
+        [status, finalRemarks, overall, requestId],
+        function (err) {
+          if (err) return res.status(500).json({ error: err.message });
+          logAudit(req.authUser.username, req.authContext.role.title, isApproved ? 'ADMIN_APPROVED' : 'ADMIN_REJECTED', requestId,
+            isApproved ? 'Head of Admin granted final clearance' : `Head of Admin rejected application: ${finalRemarks}`);
+
+          // Notify the APPLICANT on their staff-portal bell.
+          if (leave && leave.isse_file_no) {
+            if (isApproved) {
+              createNotification(
+                'staff',
+                leave.isse_file_no,
+                'Leave Approved by Head of Admin',
+                `Your ${leave.leave_type} application (#LA-${requestId}) has been granted FINAL APPROVAL. You may now report for duty on the scheduled resumption date.`,
+                'statusSection',
+                requestId
+              );
+            } else {
+              createNotification(
+                'staff',
+                leave.isse_file_no,
+                'Leave Rejected by Head of Admin',
+                `Your ${leave.leave_type} application (#LA-${requestId}) was rejected by the Head of Administration. Reason: ${finalRemarks || 'Not specified.'}`,
+                'statusSection',
+                requestId
+              );
+            }
+          }
+
+          // Notify the relieving officer if the leave was rejected.
+          if (!isApproved && leave && leave.relieving_officer_file_no) {
+            createNotification(
+              'staff',
+              leave.relieving_officer_file_no,
+              'Relieving Assignment Cancelled',
+              `${leave.full_name} (${leave.department || 'No Dept'})'s ${leave.leave_type} was rejected by the Head of Administration. You are no longer needed as relieving officer.`,
+              'statusSection',
+              requestId
+            );
+          }
+
+          markNotificationsReadForRequest(requestId, 'hoa');
+          res.json({ message: isApproved ? 'Application granted final approval by Head of Admin.' : 'Application rejected by Head of Admin.' });
+        }
+      );
     }
   );
 });
@@ -1534,7 +1871,9 @@ app.patch('/api/leave/cancel/:id', (req, res) => {
   }
 
   db.get(
-    `SELECT id, isse_file_no, hou_status, overall_status, full_name, leave_type FROM leave_requests WHERE id = ?`,
+    `SELECT id, isse_file_no, hou_status, overall_status, full_name, department, leave_type,
+            start_date, end_date, relieving_officer_file_no, relieving_officer_name
+       FROM leave_requests WHERE id = ?`,
     [id],
     (err, row) => {
       if (err) return res.status(500).json({ error: err.message });
@@ -1575,6 +1914,18 @@ app.patch('/api/leave/cancel/:id', (req, res) => {
 
           // Clear the HOU's pending notification for this cancelled request.
           markNotificationsReadForRequest(id, 'hou');
+
+          // Notify the relieving officer that they are no longer needed.
+          if (row.relieving_officer_file_no) {
+            createNotification(
+              'staff',
+              row.relieving_officer_file_no,
+              'Relieving Assignment Cancelled',
+              `${row.full_name} (${row.department || 'No Dept'}) has cancelled their ${row.leave_type}. You are no longer needed as relieving officer.`,
+              'statusSection',
+              id
+            );
+          }
 
           res.json({ message: 'Leave application cancelled successfully. You may submit a new request.' });
         }
@@ -1767,8 +2118,8 @@ app.patch('/api/leave/hou-validate-resumption', requireAuth, requireWorkflow('un
 
   const deptFilter = departmentFilterFor(req);
   const guardSql = deptFilter
-    ? `SELECT id FROM leave_requests WHERE id = $1 AND LOWER(department) = LOWER($2)`
-    : `SELECT id FROM leave_requests WHERE id = $1`;
+    ? `SELECT id, isse_file_no, full_name, leave_type FROM leave_requests WHERE id = $1 AND LOWER(department) = LOWER($2)`
+    : `SELECT id, isse_file_no, full_name, leave_type FROM leave_requests WHERE id = $1`;
   const guardParams = deptFilter ? [requestId, deptFilter] : [requestId];
 
   db.get(guardSql, guardParams, (guardErr, found) => {
@@ -1781,6 +2132,30 @@ app.patch('/api/leave/hou-validate-resumption', requireAuth, requireWorkflow('un
       function (err) {
         if (err) return res.status(500).json({ error: err.message });
         logAudit(req.authUser.username, req.authContext.role.title, isApproved ? 'HOU_RESUMPTION_VALIDATED' : 'HOU_RESUMPTION_REJECTED', requestId, houRemarks);
+
+        // Notify the APPLICANT on their staff-portal bell.
+        if (found.isse_file_no) {
+          if (isApproved) {
+            createNotification(
+              'staff',
+              found.isse_file_no,
+              'Resumption Validated by HOU',
+              `Your return-to-duty notice (#RS-${requestId}) has been validated by your Head of Unit. It is now awaiting final clearance from the Head of Administration.`,
+              'statusSection',
+              requestId
+            );
+          } else {
+            createNotification(
+              'staff',
+              found.isse_file_no,
+              'Resumption Rejected by HOU',
+              `Your return-to-duty notice (#RS-${requestId}) was rejected by your Head of Unit. Reason: ${houRemarks || 'Not specified.'}`,
+              'statusSection',
+              requestId
+            );
+          }
+        }
+
         if (isApproved) {
           createNotification('hoa', 'all', 'Resumption Awaiting HOA Approval',
             `Resumption for request #${requestId} validated by HOU and awaiting HOA clearance.`, 'adminResumptionQueueSection', requestId);
@@ -1802,14 +2177,46 @@ app.patch('/api/leave/hoa-validate-resumption', requireAuth, requireWorkflow('fi
   const resStatus = isApproved ? 'RESUMPTION APPROVED' : 'RESUMPTION REJECTED BY HOA';
   const verStatus = isApproved ? 'APPROVED' : 'REJECTED';
 
-  db.run(
-    `UPDATE leave_requests SET resumption_status = ?, admin_resumption_status = ?, admin_resumption_remarks = ?, admin_resumption_date = ? WHERE id = ?`,
-    [resStatus, verStatus, adminRemarks, now, requestId],
-    function (err) {
-      if (err) return res.status(500).json({ error: err.message });
-      logAudit(req.authUser.username, req.authContext.role.title, isApproved ? 'HOA_RESUMPTION_APPROVED' : 'HOA_RESUMPTION_REJECTED', requestId, adminRemarks);
-      markNotificationsReadForRequest(requestId, 'hoa');
-      res.json({ message: isApproved ? 'Duty resumption officially granted final approval by Head of Admin!' : 'Duty resumption rejected by Head of Admin.' });
+  db.get(
+    `SELECT isse_file_no, full_name, leave_type FROM leave_requests WHERE id = ?`,
+    [requestId],
+    (lookupErr, leave) => {
+      if (lookupErr) return res.status(500).json({ error: lookupErr.message });
+
+      db.run(
+        `UPDATE leave_requests SET resumption_status = ?, admin_resumption_status = ?, admin_resumption_remarks = ?, admin_resumption_date = ? WHERE id = ?`,
+        [resStatus, verStatus, adminRemarks, now, requestId],
+        function (err) {
+          if (err) return res.status(500).json({ error: err.message });
+          logAudit(req.authUser.username, req.authContext.role.title, isApproved ? 'HOA_RESUMPTION_APPROVED' : 'HOA_RESUMPTION_REJECTED', requestId, adminRemarks);
+
+          // Notify the APPLICANT on their staff-portal bell.
+          if (leave && leave.isse_file_no) {
+            if (isApproved) {
+              createNotification(
+                'staff',
+                leave.isse_file_no,
+                'Resumption Fully Cleared',
+                `Your return-to-duty notice (#RS-${requestId}) has been granted FINAL CLEARANCE by the Head of Administration. Your ${leave.leave_type} is now fully concluded.`,
+                'statusSection',
+                requestId
+              );
+            } else {
+              createNotification(
+                'staff',
+                leave.isse_file_no,
+                'Resumption Rejected by Head of Admin',
+                `Your return-to-duty notice (#RS-${requestId}) was rejected by the Head of Administration. Reason: ${adminRemarks || 'Not specified.'}`,
+                'statusSection',
+                requestId
+              );
+            }
+          }
+
+          markNotificationsReadForRequest(requestId, 'hoa');
+          res.json({ message: isApproved ? 'Duty resumption officially granted final approval by Head of Admin!' : 'Duty resumption rejected by Head of Admin.' });
+        }
+      );
     }
   );
 });
@@ -1837,11 +2244,14 @@ app.get('/api/notifications', requireAuth, (req, res) => {
     ctx.authority === 'full' ||
     ctx.permissions.has('staff_enquiries.manage');
 
-  let sql = `SELECT * FROM notifications WHERE 1=1`;
+  // Never show staff-portal-only notifications in the admin bell.
+  // Those are fileNo-scoped and are only served by
+  // /api/staff-notifications/:fileNo.
+  let sql = `SELECT * FROM notifications WHERE recipient_type != 'staff'`;
   let params = [];
 
   if (role === 'super_admin') {
-    // Super Admin sees every notification — no filter.
+    // Super Admin sees every (non-staff) notification — no additional filter.
 
   } else if (role === 'hou') {
     // HOU sees their own department's 'hou' notifications, plus
@@ -1881,10 +2291,138 @@ app.get('/api/notifications', requireAuth, (req, res) => {
   });
 });
 
+// ==========================================
+// STAFF NOTIFICATIONS (staff portal, fileNo-scoped)
+// ==========================================
+
+app.get('/api/staff-notifications/:fileNo', (req, res) => {
+  const fileNo = String(req.params.fileNo || '').trim();
+  if (!fileNo) return res.json([]);
+
+  db.all(
+    `SELECT id, title, message, link_section, related_request_id, is_read, created_at
+       FROM notifications
+      WHERE recipient_type = 'staff'
+        AND LOWER(recipient_id) = LOWER(?)
+      ORDER BY id DESC
+      LIMIT 30`,
+    [fileNo],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json(rows || []);
+    }
+  );
+});
+
+app.get('/api/staff-notifications/:fileNo/unread-count', (req, res) => {
+  const fileNo = String(req.params.fileNo || '').trim();
+  if (!fileNo) return res.json({ count: 0 });
+
+  db.get(
+    `SELECT COUNT(*) AS count FROM notifications
+      WHERE recipient_type = 'staff'
+        AND LOWER(recipient_id) = LOWER(?)
+        AND is_read = 0`,
+    [fileNo],
+    (err, row) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ count: row ? row.count : 0 });
+    }
+  );
+});
+
+// Public (fileNo-scoped) — same spirit as the other staff-portal endpoints.
+app.patch('/api/staff-notifications/:id/read', (req, res) => {
+  db.run(
+    `UPDATE notifications SET is_read = 1 WHERE id = ? AND recipient_type = 'staff'`,
+    [req.params.id],
+    (err) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ success: true });
+    }
+  );
+});
+
 app.patch('/api/notifications/:id/read', requireAuth, (req, res) => {
   db.run(`UPDATE notifications SET is_read = 1 WHERE id = ?`, [req.params.id], (err) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json({ success: true });
+  });
+});
+
+// Delete a single notification the admin can see
+app.delete('/api/notifications/:id', requireAuth, (req, res) => {
+  const ctx = req.authContext;
+  const role = viewRoleFor(ctx);
+  const canSeeStaffEnquiries =
+    ctx.authority === 'full' ||
+    (ctx.permissions && ctx.permissions.has('staff_enquiries.manage'));
+
+  // Build the same visibility filter used by the list endpoint
+  let where = `id = ? AND recipient_type != 'staff'`;
+  const params = [req.params.id];
+
+  if (role === 'super_admin') {
+    // any non-staff
+  } else if (role === 'hou') {
+    const dept = (ctx.user && ctx.user.department) ? ctx.user.department : '';
+    if (canSeeStaffEnquiries) {
+      where += ` AND ((recipient_type = 'hou' AND LOWER(recipient_id) = LOWER(?)) OR recipient_type = 'admin')`;
+    } else {
+      where += ` AND recipient_type = 'hou' AND LOWER(recipient_id) = LOWER(?)`;
+    }
+    params.push(dept);
+  } else if (role === 'head_of_admin') {
+    where += canSeeStaffEnquiries
+      ? ` AND (recipient_type = 'hoa' OR recipient_type = 'admin')`
+      : ` AND recipient_type = 'hoa'`;
+  } else {
+    where += canSeeStaffEnquiries
+      ? ` AND recipient_type = 'admin'`
+      : ` AND 1=0`;
+  }
+
+  db.run(`DELETE FROM notifications WHERE ${where}`, params, function (err) {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!this.changes) return res.status(404).json({ error: 'Notification not found or you cannot delete it.' });
+    res.json({ success: true, deleted: this.changes });
+  });
+});
+
+// Wipe ALL notifications the current admin can see
+app.delete('/api/notifications/all', requireAuth, (req, res) => {
+  const ctx = req.authContext;
+  const role = viewRoleFor(ctx);
+  const canSeeStaffEnquiries =
+    ctx.authority === 'full' ||
+    (ctx.permissions && ctx.permissions.has('staff_enquiries.manage'));
+
+  let where = `recipient_type != 'staff'`;
+  const params = [];
+
+  if (role === 'super_admin') {
+    // all non-staff
+  } else if (role === 'hou') {
+    const dept = (ctx.user && ctx.user.department) ? ctx.user.department : '';
+    if (canSeeStaffEnquiries) {
+      where += ` AND ((recipient_type = 'hou' AND LOWER(recipient_id) = LOWER(?)) OR recipient_type = 'admin')`;
+    } else {
+      where += ` AND recipient_type = 'hou' AND LOWER(recipient_id) = LOWER(?)`;
+    }
+    params.push(dept);
+  } else if (role === 'head_of_admin') {
+    where += canSeeStaffEnquiries
+      ? ` AND (recipient_type = 'hoa' OR recipient_type = 'admin')`
+      : ` AND recipient_type = 'hoa'`;
+  } else {
+    where += canSeeStaffEnquiries
+      ? ` AND recipient_type = 'admin'`
+      : ` AND 1=0`;
+  }
+
+  db.run(`DELETE FROM notifications WHERE ${where}`, params, function (err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ success: true, deleted: this.changes || 0 });
   });
 });
 
@@ -1964,11 +2502,120 @@ app.get('/api/admin/calendar-events', requireAuth, (req, res) => {
   });
 });
 
+// Delete a single staff notification (own only)
+app.delete('/api/staff-notifications/:id', (req, res) => {
+  db.run(
+    `DELETE FROM notifications WHERE id = ? AND recipient_type = 'staff'`,
+    [req.params.id],
+    function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ success: true, deleted: this.changes || 0 });
+    }
+  );
+});
+
+// Wipe ALL notifications for a specific staff member
+app.delete('/api/staff-notifications/all/:fileNo', (req, res) => {
+  const fileNo = String(req.params.fileNo || '').trim();
+  if (!fileNo) return res.status(400).json({ error: 'File No required.' });
+
+  db.run(
+    `DELETE FROM notifications WHERE recipient_type = 'staff' AND LOWER(recipient_id) = LOWER(?)`,
+    [fileNo],
+    function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ success: true, deleted: this.changes || 0 });
+    }
+  );
+});
+
 // ============================================================
 // ATTENDANCE MODULE
 // ============================================================
 
 const ATTENDANCE_DEFAULT_THRESHOLDS = { warning: 75, good: 90, excellent: 95 };
+
+// ------------------------------------------------------------------
+// LEAVE TYPE VISIBILITY SETTINGS
+// ------------------------------------------------------------------
+
+// GET /api/admin/settings/hidden-leave-types — for the settings page
+app.get('/api/admin/settings/hidden-leave-types',
+  requireAuth, requirePermission('settings.manage'),
+  (req, res) => {
+    db.get(
+      `SELECT setting_value FROM system_settings WHERE setting_key = 'hidden_leave_types'`,
+      [],
+      (err, row) => {
+        if (err) return res.status(500).json({ error: err.message });
+        let hidden = [];
+        if (row && row.setting_value) {
+          try { hidden = JSON.parse(row.setting_value); } catch (_) { hidden = []; }
+        }
+        if (!Array.isArray(hidden)) hidden = [];
+        res.json({
+          hidden,
+          available: ALL_LEAVE_TYPES
+        });
+      }
+    );
+  }
+);
+
+// PUT /api/admin/settings/hidden-leave-types — Super Admin saves the list
+app.put('/api/admin/settings/hidden-leave-types',
+  requireAuth, requirePermission('settings.manage'),
+  (req, res) => {
+    const { hidden } = req.body || {};
+    if (!Array.isArray(hidden)) {
+      return res.status(400).json({ error: '`hidden` must be an array of leave-type keys.' });
+    }
+
+    // Only allow keys from the canonical list (defends against typos/garbage).
+    const validKeys = new Set(ALL_LEAVE_TYPES.map(t => t.key));
+    const cleaned = hidden.filter(k => validKeys.has(k));
+
+    const json = JSON.stringify(cleaned);
+
+    db.run(
+      `INSERT INTO system_settings (setting_key, setting_value, updated_at)
+       VALUES ('hidden_leave_types', ?, NOW())
+       ON CONFLICT (setting_key) DO UPDATE
+         SET setting_value = EXCLUDED.setting_value,
+             updated_at    = NOW()
+       RETURNING setting_key`,
+      [json],
+      (err) => {
+        if (err) return res.status(500).json({ error: err.message });
+        logAudit(
+          req.authUser.username,
+          req.authContext.role.title,
+          'LEAVE_TYPES_VISIBILITY_UPDATED',
+          null,
+          `Hidden leave types set to: ${cleaned.length === 0 ? '(none)' : cleaned.join(', ')}`
+        );
+        res.json({ message: 'Leave type visibility updated.', hidden: cleaned });
+      }
+    );
+  }
+);
+
+// Public (staff portal) — returns only the array of hidden keys.
+app.get('/api/settings/hidden-leave-types', (req, res) => {
+  db.get(
+    `SELECT setting_value FROM system_settings WHERE setting_key = 'hidden_leave_types'`,
+    [],
+    (err, row) => {
+      if (err) return res.status(500).json({ error: err.message });
+      let hidden = [];
+      if (row && row.setting_value) {
+        try { hidden = JSON.parse(row.setting_value); } catch (_) { hidden = []; }
+      }
+      if (!Array.isArray(hidden)) hidden = [];
+      res.json({ hidden });
+    }
+  );
+});
 
 // ------------------------------------------------------------------
 // GET /api/admin/attendance/settings

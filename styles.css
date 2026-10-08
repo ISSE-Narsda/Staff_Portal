@@ -68,6 +68,26 @@ body {
   display: flex;
   flex-direction: column;
   padding: 20px 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(212,168,67,0.45) transparent;
+}
+.sidebar::-webkit-scrollbar {
+  width: 8px;
+}
+.sidebar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.sidebar::-webkit-scrollbar-thumb {
+  background: rgba(212,168,67,0.35);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.sidebar::-webkit-scrollbar-thumb:hover {
+  background: rgba(212,168,67,0.65);
+  background-clip: padding-box;
 }
 
 .brand-section {
@@ -524,6 +544,21 @@ input:focus, select:focus, textarea:focus {
 #staffLoginModal input#loginFileNoInput::placeholder {
   color: #94A3B8 !important;
 }
+
+/* White-themed password input on the staff login modal (matches the File No field). */
+#staffLoginModal input#loginPasswordInput {
+  background-color: #F8FAFC !important;
+  color: #1E293B !important;
+  border: 1px solid #CBD5E1 !important;
+}
+#staffLoginModal input#loginPasswordInput::placeholder {
+  color: #94A3B8 !important;
+}
+
+/* Alert / prompt modals must always render ABOVE other modals —
+   otherwise a wrong-password alert gets hidden behind the login modal. */
+#customModal { z-index: 20000 !important; }
+#promptModal { z-index: 20001 !important; }
 
 #staffLoginModal .modal-close-btn {
   color: #0B1A3A !important;
@@ -1479,4 +1514,1008 @@ body.light-mode .leave-date-timeline {
 @media (max-width: 768px) {
   .role-perm-group-body { grid-template-columns: 1fr; }
   .role-form-grid { grid-template-columns: 1fr; }
+}
+
+/* ==========================================
+   MOBILE RESPONSIVENESS — STAFF PORTAL
+   ========================================== */
+
+/* ---------- Hamburger button ---------- */
+/* Hidden by default on desktop. Only shown under the mobile breakpoint. */
+.hamburger-btn {
+  display: none;
+  width: 40px;
+  height: 40px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  margin-right: 12px;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+.hamburger-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.hamburger-btn span {
+  display: block;
+  width: 22px;
+  height: 2.5px;
+  background: var(--text-header);
+  border-radius: 2px;
+  transition: background 0.15s;
+}
+.hamburger-btn:hover span {
+  background: var(--accent-gold);
+}
+
+/* Left-side header group (hamburger + title) */
+.header-left {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+}
+.header-left h1 {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin: 0;
+}
+
+/* ---------- Sidebar backdrop ---------- */
+.sidebar-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+  z-index: 998;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+.sidebar-backdrop.show {
+  display: block;
+  opacity: 1;
+}
+
+/* ==========================================================
+   TABLET — 768px to 1023px
+   ========================================================== */
+@media (max-width: 1023px) {
+  .sidebar {
+    width: 220px;
+  }
+  .content-body {
+    padding: 20px;
+  }
+  .section-card {
+    padding: 20px;
+  }
+  .header {
+    padding: 0 20px;
+  }
+  .form-grid {
+    gap: 14px;
+  }
+  .leave-date-timeline {
+    padding: 12px 14px;
+  }
+  .date-point-day {
+    font-size: 1rem;
+  }
+  .admin-metrics-grid {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+}
+
+/* ==========================================================
+   MOBILE — under 768px
+   ========================================================== */
+@media (max-width: 767px) {
+
+  /* ---------- Header ---------- */
+  .header {
+    padding: 0 14px;
+    height: 60px;
+  }
+  .header h1 {
+    font-size: 1rem;
+  }
+  .hamburger-btn {
+    display: flex;
+  }
+  .header-actions {
+    gap: 8px;
+  }
+  .btn-logout {
+    padding: 7px 12px;
+    font-size: 0.8rem;
+  }
+  .btn-theme-toggle {
+    width: 34px;
+    height: 34px;
+  }
+  #themeIcon {
+    font-size: 1rem;
+  }
+
+  /* ---------- Sidebar becomes a slide-in drawer ---------- */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: -280px;
+    bottom: 0;
+    width: 260px;
+    z-index: 999;
+    transition: left 0.28s ease;
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.5);
+    padding: 16px 0;
+  }
+  .sidebar.open {
+    left: 0;
+  }
+  .nav-item {
+    padding: 14px 20px;
+    font-size: 0.95rem;
+  }
+  .dropdown-item {
+    padding: 11px 20px 11px 40px;
+    font-size: 0.88rem;
+  }
+
+  /* ---------- Content area ---------- */
+  .content-body {
+    padding: 14px;
+  }
+  .section-card {
+    padding: 16px;
+    border-radius: 6px;
+  }
+  .section-title {
+    font-size: 1.05rem;
+    padding-bottom: 8px;
+    margin-bottom: 14px;
+  }
+  .section-desc {
+    font-size: 0.82rem;
+    margin-top: -8px;
+    margin-bottom: 14px;
+  }
+
+  /* ---------- Forms stack to one column ---------- */
+  .form-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .form-group.full-width {
+    grid-column: span 1;
+  }
+  .form-group label {
+    font-size: 0.8rem;
+  }
+  input, select, textarea {
+    padding: 11px 12px;
+    font-size: 0.92rem;
+  }
+  .btn-submit {
+    width: 100%;
+    margin-top: 16px;
+  }
+
+  /* ---------- Toolbars (search + sort) stack ---------- */
+  .table-toolbar {
+    gap: 8px;
+    margin-bottom: 14px;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .table-search-input,
+  .table-select {
+    min-width: 0;
+    width: 100%;
+    font-size: 0.88rem;
+  }
+
+  /* ---------- Modals fit the screen ---------- */
+  .modal-card {
+    width: 96%;
+    max-width: 96%;
+    border-radius: 8px;
+  }
+  .modal-header {
+    padding: 12px 16px;
+  }
+  .modal-title {
+    font-size: 0.95rem;
+  }
+  .modal-body {
+    padding: 16px;
+    font-size: 0.9rem;
+  }
+  .modal-footer {
+    padding: 12px 16px;
+  }
+  .modal-scroll-body {
+    max-height: 70vh;
+  }
+
+  /* ---------- Policy banner ---------- */
+  .policy-alert-banner {
+    padding: 12px 14px;
+    gap: 10px;
+  }
+  .policy-alert-icon {
+    font-size: 1.1rem;
+  }
+  .policy-alert-content h4 {
+    font-size: 0.85rem;
+  }
+  .policy-alert-content p {
+    font-size: 0.78rem;
+  }
+
+  /* ---------- Leave cards — stack the timeline ---------- */
+  .executive-leave-card {
+    padding: 16px;
+    margin-bottom: 14px;
+    border-radius: 8px;
+  }
+  .leave-card-top {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .leave-type-chip {
+    font-size: 0.75rem;
+    padding: 3px 10px;
+  }
+  .leave-ref-chip {
+    font-size: 0.7rem;
+  }
+  .leave-date-timeline {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    padding: 14px;
+    text-align: center;
+  }
+  .date-timeline-point,
+  .date-timeline-point.text-right {
+    text-align: center;
+  }
+  .date-point-day {
+    font-size: 1rem;
+  }
+  .date-point-title {
+    font-size: 0.68rem;
+  }
+  .date-point-sub {
+    font-size: 0.72rem;
+  }
+  .timeline-duration-badge {
+    padding: 4px 0;
+  }
+
+  /* ---------- Approval stepper — 2 columns ---------- */
+  .stepper-track {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 14px 8px;
+  }
+  .step-name {
+    font-size: 0.7rem;
+    letter-spacing: 0.2px;
+  }
+  .step-detail {
+    font-size: 0.65rem;
+  }
+  .step-node {
+    width: 26px;
+    height: 26px;
+    font-size: 0.7rem;
+  }
+
+  /* ---------- Card action dock stacks ---------- */
+  .card-actions-dock {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding-top: 12px;
+    margin-top: 12px;
+  }
+  .card-actions-dock > div:first-child {
+    margin-right: 0 !important;
+    justify-content: center;
+  }
+  .card-actions-dock .table-actions-cell {
+    justify-content: stretch;
+  }
+  .btn-action {
+    width: 100%;
+    justify-content: center;
+    padding: 10px 14px;
+    font-size: 0.85rem;
+  }
+
+  /* ---------- Profile info rows ---------- */
+  .info-row {
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 0;
+  }
+  .info-row span {
+    font-size: 0.8rem;
+  }
+  .info-row strong {
+    font-size: 0.92rem;
+    word-break: break-word;
+  }
+
+  /* ---------- Tables (already in .table-responsive) ---------- */
+  .portal-table th,
+  .portal-table td {
+    padding: 10px 10px;
+    font-size: 0.85rem;
+  }
+
+  /* ---------- Status / History section header ---------- */
+  #statusSection > div:first-child {
+    flex-direction: column;
+    align-items: flex-start !important;
+  }
+
+  /* ---------- My Enquiries form button ---------- */
+  #submitEnquiryBtn {
+    width: 100%;
+  }
+}
+
+/* ==========================================================
+   EXTRA SMALL — under 480px
+   ========================================================== */
+@media (max-width: 479px) {
+  .header {
+    padding: 0 10px;
+    height: 56px;
+  }
+  .header h1 {
+    font-size: 0.9rem;
+  }
+  .hamburger-btn {
+    width: 36px;
+    height: 36px;
+  }
+  .hamburger-btn span {
+    width: 20px;
+  }
+  .btn-logout {
+    padding: 6px 10px;
+    font-size: 0.75rem;
+  }
+  .btn-theme-toggle {
+    width: 32px;
+    height: 32px;
+  }
+
+  .content-body {
+    padding: 10px;
+  }
+  .section-card {
+    padding: 14px;
+  }
+  .section-title {
+    font-size: 1rem;
+  }
+
+  /* Stepper to 1 column */
+  .stepper-track {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .date-point-day {
+    font-size: 0.95rem;
+  }
+
+  /* Executive leave card top padding tweak */
+  .executive-leave-card {
+    padding: 14px;
+  }
+}
+
+/* ==========================================
+   ADMIN HEADER — TIGHTEN FOR TABLET & MOBILE
+   ========================================== */
+
+@media (max-width: 1023px) {
+  /* Hide the scope caption on narrow screens — it causes crowding. */
+  #adminUnitNotice {
+    display: none !important;
+  }
+
+  /* Collapse the officer badge to just the avatar.
+     Keeping the avatar visible is IMPORTANT — it's the only
+     entry point to the Profile section now. */
+  #officerBadge {
+    padding: 4px !important;
+    gap: 0 !important;
+  }
+  #officerBadge > div:last-child {
+    display: none !important;
+  }
+
+  .header h1 {
+    font-size: 1.1rem !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 55vw;
+  }
+  .header-actions {
+    flex-shrink: 0;
+  }
+}
+
+@media (max-width: 767px) {
+  .header h1 {
+    font-size: 1rem !important;
+    max-width: 45vw;
+  }
+  /* Hide the officer badge's role/department text (keep just the avatar) */
+  #officerBadge > div:last-child {
+    display: none;
+  }
+  #officerBadge {
+    padding: 4px !important;
+    gap: 0 !important;
+  }
+}
+
+@media (max-width: 479px) {
+  .header h1 {
+    font-size: 0.88rem !important;
+    max-width: 40vw;
+  }
+  .btn-logout {
+    padding: 6px 8px !important;
+    font-size: 0.7rem !important;
+  }
+  .notif-dropdown {
+    width: calc(100vw - 16px) !important;
+    right: -6px !important;
+  }
+}
+
+/* ==========================================
+   RELIEVING OFFICER AUTOCOMPLETE
+   ========================================== */
+
+.autocomplete-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  max-height: 240px;
+  overflow-y: auto;
+  margin-top: 4px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.autocomplete-item {
+  padding: 10px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-color);
+  transition: background 0.1s;
+}
+.autocomplete-item:last-child { border-bottom: none; }
+.autocomplete-item:hover,
+.autocomplete-item.active {
+  background: rgba(212, 168, 67, 0.12);
+}
+.autocomplete-item .ac-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+.autocomplete-item .ac-meta {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.autocomplete-item .ac-file {
+  color: var(--accent-gold);
+  font-family: monospace;
+}
+.autocomplete-empty {
+  padding: 14px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+/* Chosen officer chip (shown under the input after picking) */
+.relieving-officer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 6px 12px;
+  background: rgba(212, 168, 67, 0.12);
+  border: 1px solid var(--accent-gold);
+  border-radius: 20px;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+}
+.relieving-officer-chip .ro-clear {
+  background: transparent;
+  border: none;
+  color: var(--accent-gold);
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+/* ==========================================
+   NOTIFICATION BELL (shared by staff + admin headers)
+   ========================================== */
+
+.btn-notif-bell {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: var(--text-header);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.15rem;
+  padding: 0;
+  transition: background 0.15s;
+}
+.btn-notif-bell:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+.btn-notif-bell .nav-badge {
+  position: absolute;
+  top: -4px;
+  right: -6px;
+  margin-left: 0;
+}
+
+/* ==========================================
+   NOTIFICATION DROPDOWN (shared by staff + admin headers)
+   ========================================== */
+
+.notif-dropdown {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: -8px;
+  width: 400px;
+  max-width: 92vw;
+  max-height: 520px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  z-index: 5000;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: notifFadeIn 0.15s ease-out;
+}
+@keyframes notifFadeIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.notif-dropdown-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.02);
+}
+.notif-mark-all-btn {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.15s;
+}
+.notif-mark-all-btn:hover {
+  background: rgba(212, 168, 67, 0.1);
+  color: var(--accent-gold);
+  border-color: var(--accent-gold);
+}
+.notif-dropdown-list {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 400px;
+}
+.notif-item {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-color);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.notif-item:hover {
+  background: rgba(212, 168, 67, 0.06);
+}
+.notif-item.unread {
+  background: rgba(2, 132, 199, 0.06);
+  border-left: 3px solid #0284C7;
+}
+.notif-item-title {
+  font-weight: 700;
+  color: var(--accent-gold);
+  font-size: 0.86rem;
+  margin-bottom: 4px;
+}
+.notif-item-msg {
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  line-height: 1.45;
+  margin-bottom: 6px;
+}
+.notif-item-time {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.notif-dropdown-footer {
+  padding: 10px 18px;
+  text-align: center;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.02);
+}
+.notif-empty {
+  padding: 32px 18px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+/* ==========================================
+   ADMIN DASHBOARD — MOBILE & TABLET
+   ========================================== */
+
+@media (max-width: 1023px) {
+  /* Admin table font shrinks slightly */
+  .admin-table th,
+  .admin-table td {
+    font-size: 0.82rem;
+    padding: 9px 10px;
+  }
+  .admin-metric-value {
+    font-size: 1.5rem;
+  }
+}
+
+@media (max-width: 767px) {
+
+  /* Header — hamburger appears */
+  .header {
+    padding: 0 14px;
+    height: 60px;
+  }
+  .hamburger-btn {
+    display: flex;
+  }
+  #adminUnitNotice {
+    font-size: 0.88rem !important;
+  }
+  .header-actions {
+    gap: 8px;
+  }
+  .btn-notif-bell {
+    width: 34px;
+    height: 34px;
+    font-size: 1rem;
+  }
+  .btn-theme-toggle {
+    width: 34px;
+    height: 34px;
+  }
+  .btn-logout {
+    padding: 7px 12px;
+    font-size: 0.8rem;
+  }
+  /* Hide the officer profile badge text on tiny phones, keep the avatar */
+  #officerBadge {
+    padding: 4px !important;
+    gap: 0 !important;
+  }
+  #officerBadge > div:last-child {
+    display: none;
+  }
+
+  /* Sidebar drawer */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: -280px;
+    bottom: 0;
+    width: 260px;
+    z-index: 999;
+    transition: left 0.28s ease;
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.5);
+    padding: 16px 0;
+    overflow-y: auto;
+  }
+  .sidebar.open {
+    left: 0;
+  }
+  .sidebar-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(2px);
+    z-index: 998;
+  }
+  .sidebar-backdrop.show {
+    display: block;
+  }
+
+  /* Content padding */
+  .content-body {
+    padding: 14px !important;
+  }
+
+  /* Metric cards */
+  .admin-metrics-grid {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)) !important;
+    gap: 10px !important;
+  }
+  .admin-metric-card {
+    padding: 14px 12px;
+  }
+  .admin-metric-title {
+    font-size: 0.68rem;
+  }
+  .admin-metric-value {
+    font-size: 1.4rem;
+  }
+  .admin-metric-sub {
+    font-size: 0.68rem;
+  }
+
+  /* Section titles */
+  .section-title {
+    font-size: 1.05rem !important;
+  }
+
+  /* Dashboard split grid (2fr 1fr) → single column */
+  #dashboardSection > div[style*="grid-template-columns: 2fr 1fr"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Sub-filter bar: wrap and scroll on very narrow screens */
+  .sub-filter-bar {
+    gap: 6px;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 8px;
+  }
+  .sub-filter-btn {
+    white-space: nowrap;
+    flex-shrink: 0;
+    font-size: 0.76rem;
+    padding: 6px 12px;
+  }
+
+  /* Modals */
+  .modal-card {
+    width: 96% !important;
+    max-width: 96% !important;
+  }
+  .modal-scroll-body {
+    max-height: 72vh;
+  }
+
+  /* Notification dropdown fits the viewport */
+  .notif-dropdown {
+    width: calc(100vw - 20px) !important;
+    max-width: 420px !important;
+    right: -10px !important;
+  }
+
+  /* Toolbars in Staff Directory / Attendance / Enquiries stack */
+  #staffSection > div[style*="display: flex"],
+  #attendanceSection > div[style*="display: flex"],
+  #enquiriesSection > div[style*="display: flex"] {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+  #staffSection input,
+  #staffSection select,
+  #staffSection button,
+  #attendanceSection input,
+  #attendanceSection select,
+  #attendanceSection button,
+  #enquiriesSection input,
+  #enquiriesSection select,
+  #enquiriesSection button {
+    width: 100% !important;
+    min-width: 0 !important;
+    margin-left: 0 !important;
+  }
+
+  /* The button rows on the section header (Register/Bulk Import/etc.) */
+  #staffSection > div:first-child > div:last-child,
+  #attendanceSection > div:first-child > div:last-child,
+  #enquiriesSection > div:first-child > div:last-child {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  #staffSection > div:first-child > div:last-child button,
+  #attendanceSection > div:first-child > div:last-child button,
+  #enquiriesSection > div:first-child > div:last-child button {
+    width: 100%;
+  }
+
+  /* Header row of sections that use flex space-between */
+  #staffSection > div:first-child,
+  #attendanceSection > div:first-child,
+  #enquiriesSection > div:first-child,
+  #leaveCalendarSection > div:first-child,
+  #auditLogSection > div:first-child,
+  #rolesSection > div:first-child,
+  #usersSection > div:first-child {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 10px;
+  }
+
+  /* Calendar grid — 7 cols is too tight; make it horizontally scrollable */
+  #calendarContainer {
+    min-width: 640px;
+  }
+
+  /* Table cells get tighter */
+  .admin-table th,
+  .admin-table td {
+    font-size: 0.78rem;
+    padding: 8px 10px;
+  }
+
+  /* Action buttons in admin tables — full-width or wrap */
+  .admin-table .action-btn {
+    font-size: 0.72rem;
+    padding: 4px 8px;
+  }
+}
+
+@media (max-width: 479px) {
+  .header {
+    padding: 0 10px;
+    height: 56px;
+  }
+  #adminUnitNotice {
+    font-size: 0.78rem !important;
+  }
+  .hamburger-btn {
+    width: 34px;
+    height: 34px;
+  }
+  .hamburger-btn span {
+    width: 20px;
+  }
+  .btn-logout {
+    padding: 6px 10px;
+    font-size: 0.72rem;
+  }
+
+  .content-body {
+    padding: 10px !important;
+  }
+
+  .admin-metrics-grid {
+    grid-template-columns: 1fr 1fr !important;
+  }
+  .admin-metric-card {
+    padding: 12px 10px;
+  }
+  .admin-metric-value {
+    font-size: 1.2rem;
+  }
+}
+
+/* Small trash button shown on each notification item */
+.notif-delete-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 0.9rem;
+  padding: 2px 4px;
+  opacity: 0.55;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+  line-height: 1;
+  color: var(--text-muted);
+}
+.notif-delete-btn:hover {
+  opacity: 1;
+  transform: scale(1.1);
+}
+
+/* ==========================================================
+   FINAL OVERRIDE — OFFICER AVATAR ON TABLET & MOBILE
+   ==========================================================
+   The avatar is the ONLY entry point to the Profile section
+   now that Profile is removed from the sidebar. It must stay
+   tappable on all screen sizes. Everything else in the badge
+   is hidden so it doesn't crowd the header.
+*/
+
+@media (max-width: 1023px) {
+  #officerBadge {
+    display: flex !important;
+    padding: 4px !important;
+    gap: 0 !important;
+    background: rgba(255,255,255,0.06) !important;
+    border: 1px solid rgba(212,168,67,0.35) !important;
+  }
+  #officerBadge > div:last-child {
+    display: none !important;
+  }
+  #officerAvatarInitials {
+    width: 34px !important;
+    height: 34px !important;
+  }
+}
+
+/* ==========================================================
+   FINAL OVERRIDE — NOTIFICATION DROPDOWN ON TABLET & MOBILE
+   ==========================================================
+   A fixed-width dropdown anchored to the bell bleeds off the
+   left edge on narrow screens. Pin it below the header and
+   stretch it edge-to-edge instead.
+*/
+
+@media (max-width: 1023px) {
+  .notif-dropdown {
+    position: fixed !important;
+    top: 68px !important;
+    left: 10px !important;
+    right: 10px !important;
+    width: auto !important;
+    max-width: none !important;
+    max-height: 70vh !important;
+    z-index: 6000 !important;
+  }
+  .notif-dropdown-list {
+    max-height: calc(70vh - 100px) !important;
+  }
+}
+
+@media (max-width: 479px) {
+  .notif-dropdown {
+    top: 64px !important;
+    left: 6px !important;
+    right: 6px !important;
+  }
 }

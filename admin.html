@@ -161,12 +161,20 @@
     <nav id="adminSidebarNav" class="nav-menu" style="overflow-y: auto; flex: 1;"></nav>
   </aside>
 
+  <!-- Mobile sidebar backdrop -->
+  <div class="sidebar-backdrop" id="adminSidebarBackdrop"></div>
+
   <!-- Main Content Wrapper -->
   <div class="main-wrapper">
     <header class="header" style="display: flex; justify-content: space-between; align-items: center;">
-      <div>
-        <h1 style="margin: 0; font-size: 1.4rem;">Institutional Executive Control Dashboard</h1>
-        <div id="adminUnitNotice" style="font-size: 0.82rem; color: var(--accent-gold); font-weight: 600; margin-top: 2px;">Please sign in to access the dashboard.</div>
+      <div style="display: flex; align-items: center; min-width: 0; flex: 1;">
+        <button class="hamburger-btn" id="adminHamburgerBtn" aria-label="Open menu">
+          <span></span><span></span><span></span>
+        </button>
+        <div>
+          <h1 style="margin: 0; font-size: 1.4rem;">Admin Dashboard</h1>
+          <div id="adminUnitNotice" style="font-size: 0.82rem; color: var(--accent-gold); font-weight: 600; margin-top: 2px;">Please sign in to access the dashboard.</div>
+        </div>
       </div>
       <div class="header-actions" style="display: flex; gap: 12px; align-items: center;">
         <div style="position: relative;">
@@ -181,7 +189,10 @@
           <div id="notifDropdown" class="notif-dropdown" style="display: none;">
             <div class="notif-dropdown-header">
               <span style="font-weight: 700; color: var(--accent-gold); font-size: 0.9rem; letter-spacing: 0.3px;">NOTIFICATIONS</span>
-              <button class="notif-mark-all-btn" onclick="markAllNotificationsRead(event)">Mark all read</button>
+              <div style="display: flex; gap: 6px;">
+                <button class="notif-mark-all-btn" onclick="markAllNotificationsRead(event)">Mark all read</button>
+                <button class="notif-mark-all-btn" style="border-color: #DC2626; color: #DC2626;" onclick="clearAllAdminNotifications(event)" title="Delete all visible notifications">🗑️ Clear</button>
+              </div>
             </div>
             <div id="notifDropdownList" class="notif-dropdown-list">
               <div class="notif-empty">Loading...</div>
@@ -248,24 +259,27 @@
           <button class="sub-filter-btn" onclick="filterLeaveMgmt('completed', this)">Completed Leave</button>
         </div>
 
-        <table class="admin-table">
-          <thead>
-            <tr>
-              <th>Ref ID</th>
-              <th>Staff Name & File No</th>
-              <th>Department</th>
-              <th>Leave Type</th>
-              <th>Period & Days</th>
-              <th>Workflow Status</th>
-              <th>Staff Remarks</th>
-              <th>Document</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="leaveMgmtTableBody">
-            <tr><td colspan="9" style="text-align: center; color: var(--text-muted);">Loading leave records...</td></tr>
-          </tbody>
-        </table>
+        <div class="table-responsive">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>Ref ID</th>
+                <th>Staff Name & File No</th>
+                <th>Department</th>
+                <th>Leave Type</th>
+                <th>Period & Days</th>
+                <th>Workflow Status</th>
+                <th>Relieving Officer</th>
+                <th>Staff Remarks</th>
+                <th>Document</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="leaveMgmtTableBody">
+              <tr><td colspan="10" style="text-align: center; color: var(--text-muted);">Loading leave records...</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <!-- 3. RESUMPTION MANAGEMENT -->
@@ -281,23 +295,25 @@
           <button class="sub-filter-btn" onclick="filterResumptionMgmt('rejected', this)">Rejected Resumptions</button>
         </div>
 
-        <table class="admin-table">
-          <thead>
-            <tr>
-              <th>Ref ID</th>
-              <th>Staff Details</th>
-              <th>Department</th>
-              <th>Leave Type</th>
-              <th>Resumption Date</th>
-              <th>Resumption Status</th>
-              <th>Resumption Slip</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="resumptionMgmtTableBody">
-            <tr><td colspan="8" style="text-align: center; color: var(--text-muted);">Loading resumption records...</td></tr>
-          </tbody>
-        </table>
+        <div class="table-responsive">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>Ref ID</th>
+                <th>Staff Details</th>
+                <th>Department</th>
+                <th>Leave Type</th>
+                <th>Resumption Date</th>
+                <th>Resumption Status</th>
+                <th>Resumption Slip</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="resumptionMgmtTableBody">
+              <tr><td colspan="8" style="text-align: center; color: var(--text-muted);">Loading resumption records...</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <!-- 4. LEAVE CALENDAR -->
@@ -387,14 +403,15 @@
                 <th>Department</th>
                 <th>Designation & Level</th>
                 <th>Gender</th>
-                <th>Email</th>
-                <th>Last Promotion</th>
-                <th>Next Promotion</th>
-                <th>Actions</th>
+              <th>Email</th>
+              <th>Last Promotion</th>
+              <th>Next Promotion</th>
+              <th>Password</th>
+              <th>Actions</th>
               </tr>
             </thead>
             <tbody id="staffTableBody">
-              <tr><td colspan="9" style="text-align: center; color: var(--text-muted);">Loading staff directory...</td></tr>
+              <tr><td colspan="10" style="text-align: center; color: var(--text-muted);">Loading staff directory...</td></tr>
             </tbody>
           </table>
         </div>
@@ -533,22 +550,24 @@
           </div>
           <button class="action-btn btn-approve" onclick="openAddDeptModal()">+ Create Department</button>
         </div>
-<table class="admin-table">
-  <thead>
-    <tr>
-      <th>Dept ID</th>
-      <th>Department Name</th>
-      <th>Code</th>
-      <th>Assigned Head of Unit (HOU)</th>
-      <th>Staff Count</th>
-      <th>Status</th>
-      <th>Actions</th>
-    </tr>
-  </thead>
-  <tbody id="departmentsTableBody">
-    <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Loading departments...</td></tr>
-  </tbody>
-</table>
+        <div class="table-responsive">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>Dept ID</th>
+                <th>Department Name</th>
+                <th>Code</th>
+                <th>Assigned Head of Unit (HOU)</th>
+                <th>Staff Count</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="departmentsTableBody">
+              <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Loading departments...</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
 
@@ -567,21 +586,23 @@
       <div id="documentsSection" class="section-card">
         <h2 class="section-title">Generated HR Clearance Documents</h2>
         <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 15px;">Official Leave Application Slips & Duty Resumption Clearance Slips.</p>
-        <table class="admin-table">
-          <thead>
-            <tr>
-              <th>Ref ID</th>
-              <th>Document Type</th>
-              <th>Staff Details</th>
-              <th>Department</th>
-              <th>Approval Date</th>
-              <th>Download Action</th>
-            </tr>
-          </thead>
-          <tbody id="documentsTableBody">
-            <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Loading document repository...</td></tr>
-          </tbody>
-        </table>
+        <div class="table-responsive">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>Ref ID</th>
+                <th>Document Type</th>
+                <th>Staff Details</th>
+                <th>Department</th>
+                <th>Approval Date</th>
+                <th>Download Action</th>
+              </tr>
+            </thead>
+            <tbody id="documentsTableBody">
+              <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Loading document repository...</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <!-- 10. NOTIFICATIONS -->
@@ -595,21 +616,23 @@
       <div id="approvalHistorySection" class="section-card">
         <h2 class="section-title">Approval Action History & Audit Trail</h2>
         <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 15px;">Detailed record of all leave and resumption approval actions.</p>
-        <table class="admin-table">
-          <thead>
-            <tr>
-              <th>Date & Time</th>
-              <th>Approver / Officer</th>
-              <th>Role</th>
-              <th>Action Performed</th>
-              <th>Target Record</th>
-              <th>Remarks / Details</th>
-            </tr>
-          </thead>
-          <tbody id="approvalHistoryTableBody">
-            <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Loading approval history...</td></tr>
-          </tbody>
-        </table>
+        <div class="table-responsive">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>Date & Time</th>
+                <th>Approver / Officer</th>
+                <th>Role</th>
+                <th>Action Performed</th>
+                <th>Target Record</th>
+                <th>Remarks / Details</th>
+              </tr>
+            </thead>
+            <tbody id="approvalHistoryTableBody">
+              <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Loading approval history...</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <!-- 12. AUDIT LOGS -->
@@ -621,20 +644,22 @@
           </div>
           <button class="action-btn btn-edit" onclick="loadAuditLogs()">🔄 Refresh Log</button>
         </div>
-        <table class="admin-table">
-          <thead>
-            <tr>
-              <th>Log ID</th>
-              <th>Timestamp</th>
-              <th>Actor & Role</th>
-              <th>Action</th>
-              <th>Details</th>
-            </tr>
-          </thead>
-          <tbody id="auditLogTableBody">
-            <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Loading audit logs...</td></tr>
-          </tbody>
-        </table>
+        <div class="table-responsive">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>Log ID</th>
+                <th>Timestamp</th>
+                <th>Actor & Role</th>
+                <th>Action</th>
+                <th>Details</th>
+              </tr>
+            </thead>
+            <tbody id="auditLogTableBody">
+              <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Loading audit logs...</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
 
@@ -659,6 +684,25 @@
           </div>
           <button type="submit" class="action-btn btn-approve" style="align-self: flex-start; padding: 8px 16px;">Save System Settings</button>
         </form>
+
+        <!-- Leave Type Visibility — Super Admin -->
+        <div style="margin-top: 30px; max-width: 700px; border-top: 1px solid var(--border-color); padding-top: 22px;">
+          <h3 style="font-size: 1rem; color: var(--accent-gold); margin-bottom: 6px;">📋 Leave Type Visibility</h3>
+          <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 16px; line-height: 1.55;">
+            Uncheck any leave type to hide it from the staff portal dropdown. Hidden types cannot be applied for
+            — the server rejects them even if a stale client tries to submit them. Re-check to make a type visible again.
+          </p>
+
+          <div id="leaveTypesVisibilityList" style="display: flex; flex-direction: column; gap: 8px;">
+            <em style="color: var(--text-muted);">Loading…</em>
+          </div>
+
+          <div style="display: flex; gap: 10px; margin-top: 18px;">
+            <button type="button" class="action-btn btn-approve" onclick="saveLeaveTypeVisibility()">💾 Save Visibility</button>
+            <button type="button" class="action-btn" style="background: var(--text-muted); color: #fff;" onclick="loadLeaveTypeVisibility()">↺ Reset Changes</button>
+            <span id="leaveTypesVisibilityStatus" style="align-self: center; font-size: 0.82rem; color: var(--text-muted); margin-left: auto;"></span>
+          </div>
+        </div>
       </div>
 
       <!-- 15. MY OFFICER PROFILE -->
@@ -716,22 +760,24 @@
           <button class="action-btn btn-approve" onclick="openRoleModal()">+ Create Role</button>
         </div>
 
-        <table class="admin-table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Role Title</th>
-              <th>Authority</th>
-              <th>Scope</th>
-              <th>Users</th>
-              <th>Permissions</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="rolesTableBody">
-            <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Loading roles...</td></tr>
-          </tbody>
-        </table>
+        <div class="table-responsive">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Role Title</th>
+                <th>Authority</th>
+                <th>Scope</th>
+                <th>Users</th>
+                <th>Permissions</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="rolesTableBody">
+              <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Loading roles...</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
             <!-- 17. USER MANAGEMENT -->
       <div id="usersSection" class="section-card">
@@ -743,23 +789,25 @@
           <button class="action-btn btn-approve" onclick="openUserModal()">+ Create User</button>
         </div>
 
-        <table class="admin-table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Username</th>
-              <th>Email</th>
-              <th>Role</th>
-              <th>Department</th>
-              <th>Status</th>
-              <th>Last Seen</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="usersTableBody">
-            <tr><td colspan="8" style="text-align: center; color: var(--text-muted);">Loading users...</td></tr>
-          </tbody>
-        </table>
+        <div class="table-responsive">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Username</th>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Department</th>
+                <th>Status</th>
+                <th>Last Seen</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="usersTableBody">
+              <tr><td colspan="8" style="text-align: center; color: var(--text-muted);">Loading users...</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
@@ -782,7 +830,15 @@
         </div>
         <div class="form-field">
           <label for="adminPasswordInput" style="color: #0B1A3A !important; font-weight: bold; font-size: 0.82rem;">Password</label>
-          <input type="password" id="adminPasswordInput" placeholder="Enter your password" style="width: 100%; padding: 10px; background: #F8FAFC !important; color: #0B1A3A !important; border: 1px solid #CBD5E1 !important;">
+          <div style="position: relative;">
+            <input type="password" id="adminPasswordInput" placeholder="Enter your password" style="width: 100%; padding: 10px 44px 10px 10px; background: #F8FAFC !important; color: #0B1A3A !important; border: 1px solid #CBD5E1 !important; box-sizing: border-box;">
+            <button type="button" 
+                    onclick="var i=document.getElementById('adminPasswordInput'); var t=(i.type==='password'); i.type=t?'text':'password'; this.textContent=t?'🙈':'👁';"
+                    title="Show / hide password"
+                    style="position: absolute; top: 50%; right: 8px; transform: translateY(-50%); background: transparent; border: none; cursor: pointer; font-size: 1rem; padding: 4px; color: #64748b; line-height: 1;">
+              👁
+            </button>
+          </div>
         </div>
         <button class="btn-submit" id="adminLoginBtn" style="width: 100%;">Sign In to Dashboard</button>
         <div id="adminLoginError" style="display: none; margin-top: 12px; padding: 10px; background: rgba(220, 38, 38, 0.15); border: 1px solid #DC2626; color: #DC2626; border-radius: 4px; font-size: 0.82rem; text-align: center;"></div>
@@ -879,6 +935,23 @@
     </div>
   </div>
 
+  <!-- Admin generic confirm modal (custom-styled replacement for confirm()) -->
+  <div id="adminConfirmModal" class="modal-overlay" style="display: none;">
+    <div class="modal-card" style="max-width: 440px;">
+      <div class="modal-header">
+        <span class="modal-title" id="adminConfirmTitle">Confirm Action</span>
+        <button class="modal-close-btn" onclick="closeAdminConfirmModal()">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 22px;">
+        <p id="adminConfirmMessage" style="font-size: 0.92rem; line-height: 1.55; color: var(--text-primary);"></p>
+        <div class="modal-btn-row" style="margin-top: 18px;">
+          <button type="button" class="action-btn" style="background: var(--text-muted); color: #fff;" onclick="closeAdminConfirmModal()">Cancel</button>
+          <button type="button" class="action-btn btn-reject" id="adminConfirmYesBtn">Confirm</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- WORKFLOW ACTION CONFIRMATION MODAL -->
   <div id="actionConfirmModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); align-items: center; justify-content: center; z-index: 9999;">
     <div style="background: var(--card-bg); border: 1px solid var(--border-color); width: 90%; max-width: 480px; padding: 25px; border-radius: 8px;">
@@ -898,7 +971,7 @@
   </div>
 
   <!-- ALERT MODAL -->
-  <div id="customModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); align-items: center; justify-content: center; z-index: 10000;">
+  <div id="customModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); align-items: center; justify-content: center; z-index: 20000;">
     <div style="background: var(--card-bg); border: 1px solid var(--border-color); padding: 20px; border-radius: 8px; max-width: 400px; width: 90%; text-align: center;">
       <p id="modalMessage" style="font-size: 0.95rem; margin-bottom: 15px; color: var(--text-primary);"></p>
       <button id="modalOkBtn" class="action-btn btn-edit">OK</button>
@@ -952,6 +1025,14 @@
             <div class="form-field">
               <label>Next Promotion Date (Optional)</label>
               <input type="date" id="staffRegNextPromotion">
+            </div>
+            <div class="form-field" style="grid-column: span 2;">
+              <label>Login Password *</label>
+              <div style="display: flex; gap: 8px;">
+                <input type="text" id="staffRegPassword" placeholder="Auto-generated — edit if you like" required style="flex: 1;">
+                <button type="button" class="action-btn btn-edit" onclick="regenerateStaffRegPassword()" title="Generate a new random password">↺ Generate</button>
+              </div>
+              <small style="color: var(--text-muted); font-size: 0.72rem; display: block; margin-top: 4px;">Minimum 4 characters. Share this with the staff member — they can change it themselves from their portal.</small>
             </div>
           </div>
           <div class="modal-btn-row">
@@ -1038,6 +1119,24 @@
               <input type="date" id="staffProfileNextPromotion">
             </div>
           </div>
+
+          <!-- Super Admin password controls — hidden for everyone else -->
+          <div id="staffProfilePasswordSection" style="display: none; margin-top: 15px; padding: 14px; border: 1px dashed var(--accent-gold); border-radius: 6px; background: rgba(212,168,67,0.05);">
+            <h4 style="font-size: 0.9rem; color: var(--accent-gold); margin: 0 0 10px 0;">🔐 Login Password (Super Admin Only)</h4>
+            <div class="form-field" style="margin-bottom: 10px;">
+              <label>Password</label>
+              <div style="display: flex; gap: 8px;">
+                <input type="text" id="staffProfilePasswordValue" placeholder="(no password set)" style="flex: 1;">
+                <button type="button" class="action-btn btn-edit" onclick="revealStaffProfilePassword()" title="Reveal current password">👁 Reveal</button>
+                <button type="button" class="action-btn btn-download" onclick="saveStaffProfilePassword()" title="Save this password">💾 Save</button>
+                <button type="button" class="action-btn btn-approve" onclick="regenerateStaffProfilePassword()" title="Generate and save a new random password">↺ Regenerate</button>
+              </div>
+              <small style="color: var(--text-muted); font-size: 0.72rem; display: block; margin-top: 6px;">
+                Revealing or changing a password requires you to re-enter your own Super Admin login password.
+              </small>
+            </div>
+          </div>
+
           <div class="modal-btn-row" style="justify-content: space-between;">
             <button type="button" class="action-btn btn-reject" onclick="handleDeleteStaffProfile()">🗑️ Delete Staff</button>
             <div style="display: flex; gap: 10px;">
@@ -1046,6 +1145,30 @@
             </div>
           </div>
         </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ SUPER ADMIN RE-AUTH MODAL ============ -->
+  <div id="adminReauthModal" class="modal-overlay" style="display: none;">
+    <div class="modal-card" style="max-width: 440px;">
+      <div class="modal-header">
+        <span class="modal-title">Confirm Your Identity</span>
+        <button class="modal-close-btn" onclick="closeAdminReauthModal()">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 22px;">
+        <p style="font-size: 0.88rem; color: var(--text-muted); margin-bottom: 16px;" id="adminReauthPrompt">
+          Enter your Super Admin login password to continue.
+        </p>
+        <div class="form-field">
+          <label>Your Login Password *</label>
+          <input type="password" id="adminReauthPasswordInput" placeholder="Enter your password" style="width: 100%; padding: 10px;">
+        </div>
+        <div id="adminReauthError" style="display: none; margin-top: 8px; padding: 8px 12px; background: rgba(220,38,38,0.12); border-left: 3px solid #DC2626; border-radius: 3px; color: #DC2626; font-size: 0.82rem;"></div>
+        <div class="modal-btn-row" style="margin-top: 18px;">
+          <button type="button" class="action-btn" style="background: var(--text-muted); color: #fff;" onclick="closeAdminReauthModal()">Cancel</button>
+          <button type="button" class="action-btn btn-approve" id="adminReauthConfirmBtn" onclick="submitAdminReauth()">Verify</button>
+        </div>
       </div>
     </div>
   </div>
