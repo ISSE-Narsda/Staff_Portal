@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <link rel="manifest" href="./manifest-admin.json">
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ISSE Leave Management - Admin Dashboard</title>
@@ -1366,5 +1367,14 @@
   </script>
 
   <script src="admin-script.js"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js').catch(function(err) {
+        console.warn('SW registration failed:', err);
+      });
+    });
+  }
+</script>
 </body>
 </html>

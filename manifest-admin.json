@@ -1,0 +1,21 @@
+{
+  "name": "ISSE Leave Admin",
+  "short_name": "ISSE Admin",
+  "start_url": "./admin.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0B1A3A",
+  "theme_color": "#0B1A3A",
+  "icons": [
+  {
+    "src": "images/icon-192.png",
+    "sizes": "192x192",
+    "type": "image/png"
+  },
+  {
+    "src": "images/icon-512.png",
+    "sizes": "512x512",
+    "type": "image/png"
+  }
+]
+}
