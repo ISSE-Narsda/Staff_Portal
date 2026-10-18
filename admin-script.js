@@ -9,8 +9,6 @@ const API_BASE = (window.location.hostname === 'localhost' || window.location.ho
 // ============================================================
 // AUTH TOKEN STORAGE
 // ============================================================
-// The admin session token is stored under a dedicated key.
-// Cleared on logout and on any 401.
 
 function getAdminToken() {
   return sessionStorage.getItem('isse_admin_token');
@@ -27,10 +25,6 @@ function clearAdminToken() {
 // ============================================================
 // GLOBAL FETCH WRAPPER
 // ============================================================
-// Every request to our API automatically carries the token.
-// Third-party requests pass through untouched. On 401 from a
-// non-login endpoint we clear the session and return the user
-// to the login modal.
 
 const _originalFetch = window.fetch.bind(window);
 window.fetch = function(url, options) {
@@ -70,29 +64,28 @@ let currentCalendarMonth = new Date().getMonth();
 // ============================================================
 // FRONTEND PERMISSION MODEL
 // ============================================================
-// Sections map to the permission key that unlocks them. A user
-// sees a section if they have that permission OR if their role
-// has 'full' workflow authority (Super Admin bypass, mirroring
-// the backend).
+// Each section maps to either `null` (always visible) or an array
+// of permission keys. A user sees the section if they hold ANY of
+// the keys (or are Super Admin / authority 'full').
 
 const SECTION_PERMISSIONS = {
-  dashboardSection:      null,                    // always visible
-  leaveMgmtSection:      'leave.view',
-  resumptionMgmtSection: 'resumption.view',
-  leaveCalendarSection:  'leave.view',
-  attendanceSection:     'attendance.view',
-  staffSection:          'staff.view',
-  enquiriesSection:      'staff_enquiries.manage',
-  departmentsSection:    'departments.manage',
-  reportsSection:        'reports.view',
-  documentsSection:      'documents.view',
-  notificationsSection:  'notifications.view',
-  approvalHistorySection:'approval_history.view',
-  auditLogSection:       'audit.view',
-  settingsSection:       'settings.manage',
-  rolesSection:          'settings.manage',
-    usersSection:          'settings.manage',
-  profileSection:        null                     // always visible
+  dashboardSection:       null,                                              // always visible
+  leaveMgmtSection:       ['leave.view'],
+  resumptionMgmtSection:  ['resumption.view'],
+  leaveCalendarSection:   ['leave.view'],
+  attendanceSection:      ['attendance.view'],
+  staffSection:           ['staff.view', 'staff.add', 'staff.edit', 'staff.delete'],
+  enquiriesSection:       ['staff_enquiries.view', 'staff_enquiries.manage'],
+  departmentsSection:     ['departments.view', 'departments.manage'],
+  reportsSection:         ['reports.view', 'reports.export'],
+  documentsSection:       ['documents.view', 'documents.download'],
+  notificationsSection:   ['notifications.view'],
+  approvalHistorySection: ['approval_history.view'],
+  auditLogSection:        ['audit.view'],
+  settingsSection:        ['settings.view', 'settings.manage'],
+  rolesSection:           ['roles.view', 'settings.manage'],
+  usersSection:           ['users.view', 'settings.manage'],
+  profileSection:         null                                               // always visible
 };
 
 // Populated on login and on session restore from GET /auth/session.
@@ -106,8 +99,21 @@ function hasFrontendPermission(key) {
 }
 
 function hasSectionAccess(sectionId) {
-  const key = SECTION_PERMISSIONS[sectionId];
-  return hasFrontendPermission(key);
+  const keys = SECTION_PERMISSIONS[sectionId];
+  if (keys === null || keys === undefined) return true;
+  const arr = Array.isArray(keys) ? keys : [keys];
+  return arr.some(k => hasFrontendPermission(k));
+}
+
+// Applies visibility to any element carrying a
+// data-requires-permission attribute. Used for buttons within
+// section headers (Register, Import, Export, Save, etc.).
+function applySectionButtonGating() {
+  document.querySelectorAll('[data-requires-permission]').forEach(el => {
+    const key = el.getAttribute('data-requires-permission');
+    if (!key) return;
+    el.style.display = hasFrontendPermission(key) ? '' : 'none';
+  });
 }
 
 async function loadPermissionsForCurrentUser() {
@@ -138,11 +144,6 @@ function closeModal(id) {
   if (el) el.style.display = 'none';
 }
 
-// Converts a Date object OR date string OR Postgres date value into
-// the "YYYY-MM-DD" format that <input type="date"> expects.
-// Generates a fresh staff password of the form Isse-XXXX-XXXX.
-// Mirrors the backend helper so admin-generated and server-generated
-// passwords look the same.
 function generateStaffPassword() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
   const pick = () => chars[Math.floor(Math.random() * chars.length)];
@@ -200,7 +201,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   document.getElementById('adminEmailInput')?.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); handleAdminLogin(); }
-  });  const badgeRole = document.getElementById('officerBadgeRole');
+  });
+
+  const badgeRole = document.getElementById('officerBadgeRole');
   const badgeUnit = document.getElementById('officerBadgeUnit');
   const avatar = document.getElementById('officerAvatarInitials');
   if (badgeRole) badgeRole.textContent = 'NOT SIGNED IN';
@@ -211,7 +214,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (unitNotice) unitNotice.textContent = 'Please sign in to access the dashboard.';
 
   document.getElementById('adminProfileForm')?.addEventListener('submit', handleProfileUpdate);
-    document.getElementById('registerStaffForm')?.addEventListener('submit', handleCreateStaff);
+  document.getElementById('registerStaffForm')?.addEventListener('submit', handleCreateStaff);
   document.getElementById('staffProfileForm')?.addEventListener('submit', handleUpdateStaffProfile);
   document.getElementById('createDeptForm')?.addEventListener('submit', handleCreateDept);
   document.getElementById('editDeptForm')?.addEventListener('submit', handleUpdateDept);
@@ -227,6 +230,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         await hydrateCurrentPermissions();
         hideAdminLogin();
         setupRoleInterface();
+        applySectionButtonGating();
         switchAdminTab('dashboardSection');
         startPolling();
       } else {
@@ -299,7 +303,7 @@ async function handleAdminLogin() {
       return;
     }
 
-        currentAdminUser = data.user;
+    currentAdminUser = data.user;
     if (data.token) {
       setAdminToken(data.token);
     }
@@ -312,6 +316,7 @@ async function handleAdminLogin() {
 
     hideAdminLogin();
     setupRoleInterface();
+    applySectionButtonGating();
     switchAdminTab('dashboardSection');
     startPolling();
   } catch (e) {
@@ -391,34 +396,60 @@ function renderRoleSidebar() {
       </div>`;
   }
 
+  function header(label) {
+    return `<div style="padding:16px 20px 6px; font-size:11px; text-transform:uppercase; letter-spacing:1px; color:#7F8C8D; font-weight:600;">${label}</div>`;
+  }
+
   let navHtml = '';
 
-  // Always visible
+  // Dashboard — always at top, no section header.
   navHtml += item('navDashboard', 'dashboardSection', 'Dashboard');
 
-    // Core operational
-  navHtml += item('navLeaveMgmt',        'leaveMgmtSection',        'Leave Management', 'badgePendingLeave');
-  navHtml += item('navResumptionMgmt',   'resumptionMgmtSection',   'Resumption Management', 'badgePendingResumption');
-  navHtml += item('navLeaveCalendar',    'leaveCalendarSection',    'Leave Calendar');
-  navHtml += item('navAttendance',       'attendanceSection',       'Attendance');
-  navHtml += item('navStaff',            'staffSection',            'Staff Directory');
+  // LEAVE
+  let leaveGroup = '';
+  leaveGroup += item('navLeaveMgmt',      'leaveMgmtSection',      'Leave Management', 'badgePendingLeave');
+  leaveGroup += item('navResumptionMgmt', 'resumptionMgmtSection', 'Resumption Management', 'badgePendingResumption');
+  leaveGroup += item('navLeaveCalendar',  'leaveCalendarSection',  'Leave Calendar');
+  leaveGroup += item('navAttendance',     'attendanceSection',     'Attendance');
+  if (leaveGroup.trim()) {
+    navHtml += `<div class="nav-divider"></div>`;
+    navHtml += header('Leave');
+    navHtml += leaveGroup;
+  }
 
-  // Communication
-  navHtml += item('navEnquiries',        'enquiriesSection',        'Enquiries', 'badgeStaffEnquiries');
+  // STAFF
+  let staffGroup = '';
+  staffGroup += item('navStaff',       'staffSection',       'Staff Directory');
+  staffGroup += item('navDepartments', 'departmentsSection', 'Departments & Units');
+  staffGroup += item('navEnquiries',   'enquiriesSection',   'Enquiries', 'badgeStaffEnquiries');
+  if (staffGroup.trim()) {
+    navHtml += `<div class="nav-divider"></div>`;
+    navHtml += header('Staff');
+    navHtml += staffGroup;
+  }
 
-  // Administrative
-  navHtml += item('navDepartments',      'departmentsSection',      'Departments & Units');
+  // REPORTS
+  let reportsGroup = '';
+  reportsGroup += item('navReports',   'reportsSection',   'Reports & Analytics');
+  reportsGroup += item('navDocuments', 'documentsSection', 'HR Documents');
+  if (reportsGroup.trim()) {
+    navHtml += `<div class="nav-divider"></div>`;
+    navHtml += header('Reports');
+    navHtml += reportsGroup;
+  }
 
-  // Reports & documents
-  navHtml += item('navReports',          'reportsSection',          'Reports & Analytics');
-  navHtml += item('navDocuments',        'documentsSection',        'HR Documents');
-
-  // System
-  navHtml += item('navApprovalHistory',  'approvalHistorySection',  'Approval History');
-  navHtml += item('navAuditLog',         'auditLogSection',         'Audit Logs');
-  navHtml += item('navSettings',         'settingsSection',         'Settings');
-  navHtml += item('navRoles',            'rolesSection',            'Roles & Permissions');
-  navHtml += item('navUsers',            'usersSection',            'User Accounts');
+  // SYSTEM
+  let systemGroup = '';
+  systemGroup += item('navUsers',           'usersSection',           'Admin Accounts');
+  systemGroup += item('navRoles',           'rolesSection',           'Roles & Permissions');
+  systemGroup += item('navApprovalHistory', 'approvalHistorySection', 'Approval History');
+  systemGroup += item('navAuditLog',        'auditLogSection',        'Audit Logs');
+  systemGroup += item('navSettings',        'settingsSection',        'Settings');
+  if (systemGroup.trim()) {
+    navHtml += `<div class="nav-divider"></div>`;
+    navHtml += header('System');
+    navHtml += systemGroup;
+  }
 
   nav.innerHTML = navHtml;
 }
@@ -433,10 +464,6 @@ function switchAdminTab(tabId) {
     return;
   }
 
-      // Clear .active from EVERY section card actually present in the DOM,
-  // rather than a hardcoded list that has to be kept in sync. Any new
-  // section added to admin.html is picked up automatically — no risk of
-  // forgetting to add it here and having it stack on top of the next page.
   document.querySelectorAll('.section-card').forEach(el => {
     el.classList.remove('active');
   });
@@ -449,12 +476,13 @@ function switchAdminTab(tabId) {
   const activeNavItem = document.getElementById(activeNavId);
   if (activeNavItem) activeNavItem.classList.add('active');
 
-      if (tabId === 'leaveCalendarSection') renderLeaveCalendar();
+  // Re-apply per-button visibility for the section being entered.
+  applySectionButtonGating();
+
+  if (tabId === 'leaveCalendarSection') renderLeaveCalendar();
   else if (tabId === 'attendanceSection') initAttendancePage();
   else if (tabId === 'staffSection') loadStaffTable();
   else if (tabId === 'enquiriesSection') {
-    // The full page lands in Step 5. The guard keeps the tab safe
-    // to click in the meantime so nothing errors out.
     if (typeof loadStaffEnquiriesPage === 'function') loadStaffEnquiriesPage();
   }
   else if (tabId === 'departmentsSection') loadDepartmentsTable();
@@ -463,9 +491,9 @@ function switchAdminTab(tabId) {
   else if (tabId === 'notificationsSection') loadNotificationsList();
   else if (tabId === 'approvalHistorySection') loadApprovalHistory();
   else if (tabId === 'auditLogSection') loadAuditLogs();
-    else if (tabId === 'profileSection') loadProfileSection();
+  else if (tabId === 'profileSection') loadProfileSection();
   else if (tabId === 'rolesSection') loadRolesPage();
-    else if (tabId === 'usersSection') loadUsersPage();
+  else if (tabId === 'usersSection') loadUsersPage();
   else if (tabId === 'settingsSection') loadLeaveTypeVisibility();
 }
 
@@ -484,7 +512,6 @@ function loadDashboardMetrics() {
   const role = currentAdminUser.role;
   const dept = currentAdminUser.department;
 
-  // 1. Load the stat cards
   fetch(`${API_BASE}/admin/dashboard-stats?role=${role}&department=${encodeURIComponent(dept || '')}`)
     .then(res => res.json())
     .then(stats => {
@@ -528,7 +555,6 @@ function loadDashboardMetrics() {
     })
     .catch(err => console.error('Dashboard Stats Error:', err));
 
-  // 2. Load Pending Workflow Applications Preview
   fetch(`${API_BASE}/leave/applications?statusFilter=pending_hou`)
     .then(res => res.json())
     .then(rows => {
@@ -553,7 +579,6 @@ function loadDashboardMetrics() {
       document.getElementById('dashboardPendingPreview').innerHTML = '<p style="color: var(--text-muted); font-size: 0.85rem;">Could not load pending actions.</p>';
     });
 
-  // 3. Load Recent System Activity Preview
   fetch(`${API_BASE}/admin/audit-log`)
     .then(res => res.json())
     .then(logs => {
@@ -577,8 +602,6 @@ function loadDashboardMetrics() {
 
 // ================= LEAVE MANAGEMENT =================
 
-// Fetch the attachment with the admin Bearer token, then open it as a blob URL.
-// (Direct links in a new tab would lose the Authorization header.)
 async function viewLeaveAttachment(attachmentId) {
   try {
     const res = await fetch(`${API_BASE}/leave/attachment/${attachmentId}`);
@@ -627,7 +650,6 @@ function loadLeaveMgmtTable(statusFilter = 'all') {
         let actionBtns = '';
         const authority = currentAdminUser.authority || 'none';
 
-        // Super Admin (full) can act at ANY stage of the workflow
         if (authority === 'full') {
           if (r.hou_status === 'PENDING') {
             actionBtns = `
@@ -640,15 +662,13 @@ function loadLeaveMgmtTable(statusFilter = 'all') {
               <button class="action-btn btn-reject" onclick="confirmLeaveAction(${r.id}, 'REJECT', 'HOA')">Reject</button>
             `;
           }
-        } 
-        // HOU (unit) can only endorse when pending HOU
+        }
         else if (authority === 'unit' && r.hou_status === 'PENDING') {
           actionBtns = `
             <button class="action-btn btn-approve" onclick="confirmLeaveAction(${r.id}, 'APPROVE', 'HOU')">Endorse</button>
             <button class="action-btn btn-reject" onclick="confirmLeaveAction(${r.id}, 'REJECT', 'HOU')">Reject</button>
           `;
-        } 
-        // HOA (final) can only grant final approval when pending HOA
+        }
         else if (authority === 'final' && r.hou_status === 'APPROVED' && r.admin_status === 'PENDING') {
           actionBtns = `
             <button class="action-btn btn-approve" onclick="confirmLeaveAction(${r.id}, 'APPROVE', 'HOA')">Grant Approval</button>
@@ -730,15 +750,11 @@ function loadResumptionMgmtTable(filter = 'all') {
         const resStatusUpper = (r.resumption_status || '').toUpperCase();
         const houResStatusUpper = (r.hou_resumption_status || '').toUpperCase();
 
-        // Only show action buttons if the resumption is still in-progress
-        // (Hide completely once fully approved or rejected)
         const isFullyProcessed =
           resStatusUpper === 'RESUMPTION APPROVED' ||
           resStatusUpper.includes('REJECTED');
 
         if (!isFullyProcessed) {
-
-          // Super Admin (full) — can act at BOTH stages
           if (authority === 'full') {
             if (resStatusUpper === 'PENDING HOU RESUMPTION APPROVAL') {
               actionBtns = `
@@ -752,14 +768,12 @@ function loadResumptionMgmtTable(filter = 'all') {
               `;
             }
           }
-          // HOU (unit) — only HOU stage
           else if (authority === 'unit' && resStatusUpper === 'PENDING HOU RESUMPTION APPROVAL') {
             actionBtns = `
               <button class="action-btn btn-approve" onclick="confirmResumptionAction(${r.id}, 'APPROVE', 'HOU')">Validate Return</button>
               <button class="action-btn btn-reject" onclick="confirmResumptionAction(${r.id}, 'REJECT', 'HOU')">Reject Return</button>
             `;
           }
-          // HOA (final) — only HOA stage
           else if (authority === 'final' && (resStatusUpper === 'PENDING HOA RESUMPTION APPROVAL' || houResStatusUpper === 'VERIFIED')) {
             actionBtns = `
               <button class="action-btn btn-approve" onclick="confirmResumptionAction(${r.id}, 'APPROVE', 'HOA')">Final Clearance</button>
@@ -1030,7 +1044,7 @@ function loadStaffTable() {
     })
     .catch(err => {
       console.error('Staff Load Error:', err);
-      tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: #DC2626;">Failed to load staff records.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: #DC2626;">Failed to load staff records.</td></tr>';
     });
 }
 
@@ -1073,7 +1087,6 @@ function applyStaffFilters() {
 
   let rows = cachedAllStaff.slice();
 
-  // ---- Filter ----
   if (search) {
     rows = rows.filter(s => {
       return (
@@ -1089,7 +1102,6 @@ function applyStaffFilters() {
   if (deptFilter)   rows = rows.filter(s => (s.department || '') === deptFilter);
   if (genderFilter) rows = rows.filter(s => (s.gender || 'Male') === genderFilter);
 
-  // ---- Sort ----
   const extractGL = (gl) => {
     const n = parseInt(String(gl || '').replace(/[^0-9]/g, ''), 10);
     return isNaN(n) ? 0 : n;
@@ -1106,7 +1118,6 @@ function applyStaffFilters() {
   };
   rows.sort(cmp[sortKey] || cmp.name_asc);
 
-  // ---- Count indicator ----
   const countEl = document.getElementById('staffFilterCount');
   if (countEl) {
     const total = cachedAllStaff.length;
@@ -1116,16 +1127,15 @@ function applyStaffFilters() {
       : `${total} staff total`;
   }
 
-  // ---- Render ----
   if (rows.length === 0) {
     tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; color: var(--text-muted);">No staff match the current filters.</td></tr>';
     return;
   }
 
-    const isSuperAdmin = currentAdminUser && currentAdminUser.authority === 'full';
+  const isSuperAdmin = currentAdminUser && currentAdminUser.authority === 'full';
+  const canEditStaff = hasFrontendPermission('staff.edit');
 
   tbody.innerHTML = rows.map(s => {
-    // Password cell — only Super Admin sees actionable controls
     let passwordCell;
     if (!isSuperAdmin) {
       passwordCell = `<span style="color: var(--text-muted); font-size: 0.75rem;">🔒 Restricted</span>`;
@@ -1140,6 +1150,10 @@ function applyStaffFilters() {
       `;
     }
 
+    const profileButton = canEditStaff
+      ? `<button class="action-btn btn-edit" onclick="openStaffProfileModal(${s.id})">View Profile</button>`
+      : `<span style="color: var(--text-muted); font-size: 0.75rem;">🔒 View Only</span>`;
+
     return `
       <tr>
         <td><strong>${s.isse_file_no}</strong></td>
@@ -1151,9 +1165,7 @@ function applyStaffFilters() {
         <td>${s.last_promotion_date ? formatDateDisplay(formatDateForInput(s.last_promotion_date)) : '—'}</td>
         <td>${s.next_promotion_date ? formatDateDisplay(formatDateForInput(s.next_promotion_date)) : '—'}</td>
         <td>${passwordCell}</td>
-        <td>
-          <button class="action-btn btn-edit" onclick="openStaffProfileModal(${s.id})">View Profile</button>
-        </td>
+        <td>${profileButton}</td>
       </tr>
     `;
   }).join('');
@@ -1260,18 +1272,22 @@ function openStaffProfileModal(staffId) {
       document.getElementById('staffProfileLastPromotion').value = formatDateForInput(s.last_promotion_date);
       document.getElementById('staffProfileNextPromotion').value = formatDateForInput(s.next_promotion_date);
 
-      // Super Admin password controls
       const pwdSection = document.getElementById('staffProfilePasswordSection');
       const pwdValueInput = document.getElementById('staffProfilePasswordValue');
       if (pwdSection) {
         pwdSection.style.display = (currentAdminUser && currentAdminUser.authority === 'full') ? 'block' : 'none';
       }
       if (pwdValueInput) {
-        // Show masked if set, empty + placeholder if not.
         pwdValueInput.value = s.has_password ? '••••••••' : '';
         pwdValueInput.dataset.hasPassword = s.has_password ? '1' : '0';
         pwdValueInput.dataset.staffId = s.id;
       }
+
+      // Gate the Save / Delete buttons based on permissions.
+      const saveBtn = document.getElementById('staffProfileSaveBtn');
+      const deleteBtn = document.getElementById('staffProfileDeleteBtn');
+      if (saveBtn) saveBtn.style.display = hasFrontendPermission('staff.edit') ? '' : 'none';
+      if (deleteBtn) deleteBtn.style.display = hasFrontendPermission('staff.delete') ? '' : 'none';
 
       // Department dropdown
       const deptSel = document.getElementById('staffProfileDepartment');
@@ -1281,7 +1297,6 @@ function openStaffProfileModal(staffId) {
         deptSel.innerHTML += `<option value="${d.name}" ${selected}>${d.name} (${d.code})</option>`;
       });
 
-      // If current department isn't in cached list, add it as fallback
       if (s.department && !cachedDepartments.find(d => d.name.toLowerCase() === s.department.toLowerCase())) {
         deptSel.innerHTML += `<option value="${s.department}" selected>${s.department}</option>`;
       }
@@ -1292,16 +1307,8 @@ function openStaffProfileModal(staffId) {
 }
 
 // ================= SUPER ADMIN PASSWORD CONTROLS =================
-// Two paths:
-//   - View Profile modal buttons (Reveal / Save / Regenerate):
-//     call the endpoint directly, no re-auth.
-//   - Table cell Reveal button:
-//     still asks for the Super Admin's login password as a
-//     secondary confirmation.
-// The backend accepts an optional adminPassword; when it's
-// omitted, the action proceeds directly.
 
-let pendingPasswordAction = null; // only used by the table reveal path
+let pendingPasswordAction = null;
 
 function openAdminReauth(action) {
   if (!currentAdminUser || currentAdminUser.authority !== 'full') {
@@ -1375,8 +1382,6 @@ async function submitAdminReauth() {
     if (btn) { btn.disabled = false; btn.textContent = orig; }
   }
 }
-
-// --- Profile modal actions (no re-auth — direct call) ---
 
 async function revealStaffProfilePassword() {
   const inputEl = document.getElementById('staffProfilePasswordValue');
@@ -1455,21 +1460,6 @@ async function regenerateStaffProfilePassword() {
   }
 }
 
-// --- Table cell reveal (keeps the re-auth confirmation) ---
-function revealTablePassword(staffId) {
-  openAdminReauth({ type: 'reveal', staffId: Number(staffId), source: 'table' });
-}
-
-function hideTablePassword(staffId) {
-  const cell = document.getElementById(`pwd-cell-${staffId}`);
-  if (!cell) return;
-  cell.innerHTML = `
-    <span style="font-family: monospace; letter-spacing: 2px; color: var(--text-muted);">••••••••</span>
-    <button class="action-btn btn-edit" style="padding: 2px 6px; font-size: 0.68rem; margin-left: 6px;" onclick="revealTablePassword(${staffId})" title="Reveal">👁</button>
-  `;
-}
-
-// --- Table cell action (only when column shows a reveal button) ---
 function revealTablePassword(staffId) {
   openAdminReauth({ type: 'reveal', staffId: Number(staffId), source: 'table' });
 }
@@ -1546,7 +1536,7 @@ function handleDeleteStaffProfile() {
     .catch(err => showAlert(err.message));
 }
 
-// ================= DEPARTMENTS (FULL CRUD) =================
+// ================= DEPARTMENTS =================
 
 function loadDepartmentsTable() {
   const tbody = document.getElementById('departmentsTableBody');
@@ -1561,19 +1551,25 @@ function loadDepartmentsTable() {
         return;
       }
 
-      tbody.innerHTML = depts.map(d => `
-        <tr>
-          <td>#DEPT-${d.id}</td>
-          <td><strong>${d.name}</strong></td>
-          <td>${d.code}</td>
-          <td><span class="status-badge ${d.assigned_hou && d.assigned_hou !== 'Unassigned' ? 'badge-approved' : 'badge-neutral'}">${d.assigned_hou || 'Unassigned'}</span></td>
-          <td>${d.staff_count || 0} Members</td>
-          <td><span class="status-badge badge-approved">${d.status}</span></td>
-          <td>
-            <button class="action-btn btn-edit" onclick="openEditDeptModal(${d.id})">Edit</button>
-          </td>
-        </tr>
-      `).join('');
+      const canManageDept = hasFrontendPermission('departments.manage');
+
+      tbody.innerHTML = depts.map(d => {
+        const actionCell = canManageDept
+          ? `<button class="action-btn btn-edit" onclick="openEditDeptModal(${d.id})">Edit</button>`
+          : `<span style="color: var(--text-muted); font-size: 0.75rem;">🔒 View Only</span>`;
+
+        return `
+          <tr>
+            <td>#DEPT-${d.id}</td>
+            <td><strong>${d.name}</strong></td>
+            <td>${d.code}</td>
+            <td><span class="status-badge ${d.assigned_hou && d.assigned_hou !== 'Unassigned' ? 'badge-approved' : 'badge-neutral'}">${d.assigned_hou || 'Unassigned'}</span></td>
+            <td>${d.staff_count || 0} Members</td>
+            <td><span class="status-badge badge-approved">${d.status}</span></td>
+            <td>${actionCell}</td>
+          </tr>
+        `;
+      }).join('');
 
       populateCalendarDeptFilter();
     });
@@ -1592,13 +1588,11 @@ function populateCalendarDeptFilter() {
 }
 
 function openAddDeptModal() {
-  // Reset form
   const nameEl = document.getElementById('deptName');
   const codeEl = document.getElementById('deptCode');
   if (nameEl) nameEl.value = '';
   if (codeEl) codeEl.value = '';
 
-  // Populate HOU dropdown (all HOU accounts not yet assigned to a department)
   const houSelect = document.getElementById('deptHouSelect');
   if (houSelect) {
     houSelect.innerHTML = '<option value="Unassigned">-- Unassigned --</option>';
@@ -1662,7 +1656,6 @@ function openEditDeptModal(deptId) {
   document.getElementById('editDeptCode').value = dept.code;
   document.getElementById('editDeptTitle').textContent = `Edit Department: ${dept.name}`;
 
-  // Populate HOU dropdown
   const houSelect = document.getElementById('editDeptHouSelect');
   if (houSelect) {
     houSelect.innerHTML = `<option value="Unassigned">-- Unassigned --</option>`;
@@ -1682,7 +1675,6 @@ function openEditDeptModal(deptId) {
     })
     .catch(() => {});
 
-  // Load staff for this department + all staff for the "Add" dropdown
   loadEditDeptStaff(dept.name);
 
   openModal('editDeptModal');
@@ -1695,7 +1687,6 @@ function loadEditDeptStaff(deptName) {
 
   staffList.innerHTML = '<p style="color: var(--text-muted); font-size: 0.8rem;">Loading staff...</p>';
 
-  // Get all staff across all departments
   fetch(`${API_BASE}/admin/staff`)
     .then(res => res.json())
     .then(allStaff => {
@@ -1717,7 +1708,6 @@ function loadEditDeptStaff(deptName) {
         `).join('');
       }
 
-      // Populate the "Add staff" dropdown with staff NOT in this department
       const eligible = allStaff.filter(s => !s.department || s.department.toLowerCase() !== deptName.toLowerCase());
       addSelect.innerHTML = '<option value="">-- Select a staff member --</option>';
       eligible.forEach(s => {
@@ -1843,7 +1833,6 @@ function handleDeleteDept() {
     .catch(err => showAlert(err.message));
 }
 
-
 // ================= LEAVE TYPE VISIBILITY =================
 
 let cachedLeaveTypeVisibility = { hidden: [], available: [] };
@@ -1855,6 +1844,8 @@ async function loadLeaveTypeVisibility() {
 
   list.innerHTML = '<em style="color: var(--text-muted);">Loading…</em>';
   if (status) status.textContent = '';
+
+  const canManage = hasFrontendPermission('settings.manage');
 
   try {
     const res = await fetch(`${API_BASE}/admin/settings/hidden-leave-types`);
@@ -1874,12 +1865,14 @@ async function loadLeaveTypeVisibility() {
     list.innerHTML = cachedLeaveTypeVisibility.available.map(t => {
       const isVisible = !cachedLeaveTypeVisibility.hidden.includes(t.key);
       const keySafe = String(t.key).replace(/"/g, '&quot;');
+      const checkboxDisabled = canManage ? '' : 'disabled';
       return `
-        <label style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; cursor: pointer;">
+        <label style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; cursor: ${canManage ? 'pointer' : 'default'};">
           <input type="checkbox"
                  class="leave-type-visible-checkbox"
                  data-key="${keySafe}"
                  ${isVisible ? 'checked' : ''}
+                 ${checkboxDisabled}
                  style="width: auto; accent-color: var(--accent-gold);">
           <span style="flex: 1;">
             <div style="font-weight: 600; color: var(--text-primary); font-size: 0.9rem;">${t.label}</div>
@@ -1920,7 +1913,6 @@ async function saveLeaveTypeVisibility() {
     cachedLeaveTypeVisibility.hidden = data.hidden || hidden;
     if (status) status.textContent = `✓ Saved (${hidden.length} hidden)`;
 
-    // Refresh the badges so label text updates
     loadLeaveTypeVisibility();
   } catch (err) {
     if (status) status.textContent = '✗ ' + err.message;
@@ -1954,7 +1946,6 @@ function exportReportCSV() {
         return;
       }
 
-      // CSV cell escape: wrap in quotes and double any internal quotes
       const esc = (v) => {
         if (v === null || v === undefined) return '';
         const s = String(v);
@@ -1966,7 +1957,6 @@ function exportReportCSV() {
         'Start Date', 'End Date', 'Days', 'Workflow Status', 'Resumption Status'
       ];
 
-      // UTF-8 BOM so Excel opens it correctly
       let csv = '\uFEFF' + headers.map(esc).join(',') + '\r\n';
 
       rows.forEach(r => {
@@ -2003,8 +1993,6 @@ function exportReportCSV() {
     });
 }
 
-// Opens a printable executive report in a new window.
-// Bypasses the print media query in styles.css (which is only for the slip modal).
 function printExecutiveReport() {
   Promise.all([
     fetch(`${API_BASE}/admin/dashboard-stats?role=super_admin`).then(r => r.json()),
@@ -2018,7 +2006,6 @@ function printExecutiveReport() {
         ? `${currentAdminUser.role} — ${currentAdminUser.department || 'All Units'}`
         : 'Institutional';
 
-      // Summary rows
       const statusBreakdown = {};
       allRows.forEach(r => {
         const s = (r.overall_status || 'UNKNOWN').trim();
@@ -2030,7 +2017,6 @@ function printExecutiveReport() {
         .map(([status, count]) => `<tr><td>${status}</td><td style="text-align:right;font-weight:bold;">${count}</td></tr>`)
         .join('') || '<tr><td colspan="2" style="text-align:center;color:#64748b;">No data</td></tr>';
 
-      // Recent 25 applications table
       const recentHtml = allRows.slice(0, 25).map(r => `
         <tr>
           <td>#LA-${r.id}</td>
@@ -2126,6 +2112,8 @@ function loadDocumentsTable() {
   const tbody = document.getElementById('documentsTableBody');
   if (!tbody) return;
 
+  const canDownload = hasFrontendPermission('documents.download');
+
   fetch(`${API_BASE}/leave/all-queue`)
     .then(res => res.json())
     .then(rows => {
@@ -2135,25 +2123,33 @@ function loadDocumentsTable() {
         return;
       }
 
-      tbody.innerHTML = approved.map(r => `
-        <tr>
-          <td>#DOC-${r.id}</td>
-          <td>Leave Clearance Certificate</td>
-          <td><strong>${r.full_name}</strong> (${r.isse_file_no})</td>
-          <td><span class="dept-badge">${r.department}</span></td>
-          <td>${formatDateDisplay(r.end_date)}</td>
-          <td>
+      tbody.innerHTML = approved.map(r => {
+        let actionCell;
+        if (canDownload) {
+          actionCell = `
             <button class="action-btn btn-download" onclick="downloadApplication(${r.id})">📄 Leave Slip</button>
             ${r.resumption_status === 'RESUMPTION APPROVED' ? `<button class="action-btn btn-download" style="background:#16A34A;" onclick="downloadResumptionSlip(${r.id})">📄 Resumption Slip</button>` : ''}
-          </td>
-        </tr>
-      `).join('');
+          `;
+        } else {
+          actionCell = `<span style="color: var(--text-muted); font-size: 0.75rem;">🔒 Download permission required</span>`;
+        }
+
+        return `
+          <tr>
+            <td>#DOC-${r.id}</td>
+            <td>Leave Clearance Certificate</td>
+            <td><strong>${r.full_name}</strong> (${r.isse_file_no})</td>
+            <td><span class="dept-badge">${r.department}</span></td>
+            <td>${formatDateDisplay(r.end_date)}</td>
+            <td>${actionCell}</td>
+          </tr>
+        `;
+      }).join('');
     });
 }
 
 // ================= NOTIFICATIONS (Bell Dropdown) =================
 
-// Maps backend link_section values to the current sidebar section IDs.
 function resolveNotifLink(linkSection) {
   if (!linkSection) return null;
   if (document.getElementById(linkSection)) return linkSection;
@@ -2282,13 +2278,11 @@ function openNotification(id, linkSection) {
       if (target) {
         switchAdminTab(target);
       } else {
-        // Nothing to route to — just refresh the badge so the unread count updates.
         refreshNotifBadge();
       }
     });
 }
 
-// Generic custom-styled confirm dialog (replaces native confirm()).
 let _adminConfirmCallback = null;
 
 function showAdminConfirm(title, message, yesLabel, onConfirm) {
@@ -2371,7 +2365,6 @@ function markAllNotificationsRead(event) {
     .catch(() => {});
 }
 
-// Close dropdown when clicking anywhere outside the panel
 document.addEventListener('click', function (e) {
   const dd = document.getElementById('notifDropdown');
   const bell = document.getElementById('notifBellBtn');
@@ -2432,7 +2425,6 @@ function loadAuditLogs() {
       `).join('');
     });
 }
-
 
 // ================= DOWNLOADS =================
 
@@ -2641,7 +2633,6 @@ function logoutAdmin() {
   };
 
   if (currentAdminUser && currentAdminUser.id) {
-    // Token is attached automatically by the fetch wrapper.
     fetch(`${API_BASE}/auth/admin-logout`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
@@ -2650,8 +2641,9 @@ function logoutAdmin() {
     finishLogout();
   }
 }
+
 // ============================================================
-// ROLES PAGE — Phase 2
+// ROLES PAGE
 // ============================================================
 
 let cachedRoles = [];
@@ -2702,18 +2694,23 @@ function renderRolesTable() {
     none:  'None'
   };
 
+  const canManageRoles = hasFrontendPermission('settings.manage');
+
   tbody.innerHTML = cachedRoles.map((r, i) => {
     const isProtected = r.is_protected === true;
 
     const actions = [];
-    if (hasFrontendPermission('settings.manage')) {
+    if (canManageRoles) {
       actions.push(`<button class="action-btn btn-edit" onclick="openRoleModal(${r.id})">✏️ Edit</button>`);
     }
-    if (!isProtected && hasFrontendPermission('settings.manage')) {
+    if (!isProtected && canManageRoles) {
       actions.push(`<button class="action-btn btn-reject" onclick="deleteRole(${r.id})">🗑️ Delete</button>`);
     }
     if (isProtected) {
       actions.push(`<span style="font-size:0.75rem;color:var(--text-muted);">Protected</span>`);
+    }
+    if (!canManageRoles) {
+      actions.push(`<span style="font-size:0.72rem;color:var(--text-muted);">🔒 View Only</span>`);
     }
 
     return `
@@ -2748,7 +2745,6 @@ async function openRoleModal(roleId) {
   const isEdit = !!roleId;
   const role = isEdit ? cachedRoles.find(r => r.id === roleId) : null;
 
-  // Get the role's current permissions (needs a per-role fetch)
   let currentPerms = [];
   if (isEdit) {
     try {
@@ -2759,7 +2755,6 @@ async function openRoleModal(roleId) {
     }
   }
 
-  // Build modal HTML
   const modalId = 'roleModal';
   let existing = document.getElementById(modalId);
   if (existing) existing.remove();
@@ -2826,10 +2821,8 @@ async function openRoleModal(roleId) {
 
   document.body.appendChild(modal);
 
-  // Render permission checkboxes
   renderPermissionCheckboxes(currentPerms, isEdit && role.is_protected);
 
-  // Wire save
   document.getElementById('roleSaveBtn').addEventListener('click', function () {
     saveRole(roleId, isEdit);
   });
@@ -2858,12 +2851,9 @@ function renderPermissionCheckboxes(currentPerms, isProtected) {
         <div class="role-perm-group-body">
     `;
 
-        byGroup[groupName].forEach(p => {
+    byGroup[groupName].forEach(p => {
       const checked = currentPerms.includes(p.key) || (p.workflow && isProtected);
       const workflowLocked = !!p.workflow;
-      // Only workflow-governed permissions are locked. Protected roles
-      // can still have their other permissions toggled (attendance.view,
-      // staff.view, reports.view, etc.).
       const disabled = workflowLocked ? 'disabled' : '';
       const rowClass = workflowLocked ? 'disabled' : '';
       const note = workflowLocked ? `<span class="workflow-note">Granted automatically by the role's authority level.</span>` : '';
@@ -2898,7 +2888,6 @@ async function saveRole(roleId, isEdit) {
   const workflow_authority = authEl.value;
   const scope = scopeEl.value;
 
-  // Collect checked permissions (skip the disabled workflow ones)
   const permissions = Array.from(document.querySelectorAll('.role-perm-checkbox:not(:disabled):checked'))
     .map(cb => cb.value);
 
@@ -2960,6 +2949,7 @@ async function deleteRole(roleId) {
     showAlert(err.message);
   }
 }
+
 async function hydrateCurrentPermissions() {
   try {
     const res = await fetch(`${API_BASE}/auth/permissions`);
@@ -2977,8 +2967,9 @@ async function hydrateCurrentPermissions() {
     currentAdminAuthority = 'none';
   }
 }
+
 // ============================================================
-// USER MANAGEMENT — Phase 3
+// ADMIN ACCOUNT MANAGEMENT (was: User Management)
 // ============================================================
 
 let cachedUsers = [];
@@ -2992,7 +2983,6 @@ async function loadUsersPage() {
     if (!res.ok) throw new Error('Failed to load users');
     cachedUsers = await res.json();
 
-    // Ensure roles are loaded too (needed by the modal)
     if (!cachedRoles.length) {
       const rolesRes = await fetch(`${API_BASE}/admin/roles`);
       if (rolesRes.ok) cachedRoles = await rolesRes.json();
@@ -3014,6 +3004,8 @@ function renderUsersTable() {
     return;
   }
 
+  const canManageUsers = hasFrontendPermission('settings.manage');
+
   tbody.innerHTML = cachedUsers.map((u, i) => {
     const isCurrent = currentAdminUser && String(u.id) === String(currentAdminUser.id);
     const statusCls = u.is_active ? 'badge-approved' : 'badge-neutral';
@@ -3025,7 +3017,7 @@ function renderUsersTable() {
       : 'Never';
 
     const actions = [];
-    if (hasFrontendPermission('settings.manage')) {
+    if (canManageUsers) {
       actions.push(`<button class="action-btn btn-edit" onclick="openUserModal(${u.id})">✏️</button>`);
       if (!isCurrent) {
         actions.push(`<button class="action-btn btn-reject" onclick="deleteUser(${u.id}, '${escapeJs(u.username)}')">🗑️</button>`);
@@ -3033,6 +3025,9 @@ function renderUsersTable() {
     }
     if (isCurrent) {
       actions.push(`<span style="font-size:0.72rem;color:var(--accent-gold);font-weight:700;">YOU</span>`);
+    }
+    if (!canManageUsers) {
+      actions.push(`<span style="font-size:0.72rem;color:var(--text-muted);">🔒 View Only</span>`);
     }
 
     return `
@@ -3061,7 +3056,6 @@ async function openUserModal(userId) {
     if (r.ok) cachedRoles = await r.json();
   }
 
-  // Fetch departments to populate the dropdown
   let deptList = [];
   try {
     const dRes = await fetch(`${API_BASE}/admin/departments`);
@@ -3069,7 +3063,7 @@ async function openUserModal(userId) {
   } catch (e) {
     console.warn('Could not load departments:', e);
   }
-  
+
   let existing = document.getElementById('userModal');
   if (existing) existing.remove();
 
@@ -3085,7 +3079,7 @@ async function openUserModal(userId) {
   modal.innerHTML = `
     <div class="modal-card" style="max-width:560px; width:95%; max-height:92vh; overflow-y:auto;">
       <div class="modal-header">
-        <span class="modal-title">${isEdit ? 'Edit User' : 'Create User'}</span>
+        <span class="modal-title">${isEdit ? 'Edit Admin' : 'Create Admin'}</span>
         <button class="modal-close-btn" onclick="closeUserModal()">&times;</button>
       </div>
       <div class="modal-body" style="padding:22px;">
@@ -3134,7 +3128,7 @@ async function openUserModal(userId) {
 
         <div class="modal-btn-row" style="justify-content:flex-end;gap:10px;margin-top:18px;">
           <button class="action-btn" style="background:var(--text-muted);color:#fff;" onclick="closeUserModal()">Cancel</button>
-          <button class="action-btn btn-approve" id="userSaveBtn">${isEdit ? 'Save Changes' : 'Create User'}</button>
+          <button class="action-btn btn-approve" id="userSaveBtn">${isEdit ? 'Save Changes' : 'Create Admin'}</button>
         </div>
       </div>
     </div>
@@ -3161,13 +3155,11 @@ function onUserRoleChange() {
   if (scope === 'department') {
     group.style.display = 'block';
     input.required = true;
-    // Ensure a department is selected if creating a new HOU
     if (!input.value) input.value = '';
   } else {
     group.style.display = 'block';
     input.required = false;
-    // For global roles, we don't need a specific department
-    input.value = 'All Units'; 
+    input.value = 'All Units';
   }
 }
 
@@ -3233,7 +3225,7 @@ async function saveUser(userId, isEdit) {
     if (!res.ok) throw new Error(data.error || 'Save failed.');
 
     closeUserModal();
-    showAlert(data.message || 'User saved.');
+    showAlert(data.message || 'Admin saved.');
     await loadUsersPage();
   } catch (err) {
     showUserMsg(err.message, 'error');
@@ -3253,13 +3245,13 @@ function showUserMsg(text, kind) {
 }
 
 async function deleteUser(userId, username) {
-  if (!confirm(`Delete user "${username}"? This cannot be undone.`)) return;
+  if (!confirm(`Delete admin "${username}"? This cannot be undone.`)) return;
 
   try {
     const res = await fetch(`${API_BASE}/admin/users/${userId}`, { method: 'DELETE' });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Delete failed.');
-    showAlert(data.message || 'User deleted.');
+    showAlert(data.message || 'Admin deleted.');
     await loadUsersPage();
   } catch (err) {
     showAlert(err.message);
@@ -3297,10 +3289,8 @@ async function handleBulkStaffImport() {
   const errors = [];
 
   lines.forEach((line, index) => {
-    // Split by comma, trim each part
     const parts = line.split(',').map(p => p.trim());
-    
-    // We need at least 6 columns (File No, Name, Dept, Desig, Grade, Gender)
+
     if (parts.length < 6) {
       errors.push(`Line ${index + 1}: Missing required columns. Expected at least 6.`);
       return;
@@ -3355,22 +3345,18 @@ async function handleBulkStaffImport() {
   }
 }
 
-// ================= EXPORT STAFF CSV =================
-
 function exportStaffCSV() {
   if (!cachedAllStaff || cachedAllStaff.length === 0) {
     showAlert('No staff records to export.');
     return;
   }
 
-  // CSV escape helper — wraps in quotes and doubles any internal quotes
   const esc = (v) => {
     if (v === null || v === undefined) return '';
     const s = String(v);
     return `"${s.replace(/"/g, '""')}"`;
   };
 
-  // Header row
   const headers = [
     'ISSE File No',
     'Full Name',
@@ -3395,7 +3381,6 @@ function exportStaffCSV() {
     s.next_promotion_date ? formatDateForInput(s.next_promotion_date) : ''
   ]);
 
-  // BOM at the start so Excel opens UTF-8 correctly
   let csv = '\uFEFF' + headers.map(esc).join(',') + '\r\n';
   rows.forEach(r => {
     csv += r.map(esc).join(',') + '\r\n';
@@ -3415,8 +3400,6 @@ function exportStaffCSV() {
 
   showAlert(`Exported ${cachedAllStaff.length} staff records to CSV.`);
 }
-
-// ================= DELETE ALL STAFF =================
 
 function confirmDeleteAllStaff() {
   if (!cachedAllStaff || cachedAllStaff.length === 0) {
@@ -3477,7 +3460,6 @@ async function executeDeleteAllStaff() {
 // ATTENDANCE MODULE
 // ============================================================
 
-// Nigerian public holidays (mirrors the backend list)
 const ATTENDANCE_PUBLIC_HOLIDAYS = new Set([
   '2024-01-01','2024-03-29','2024-04-01','2024-04-10','2024-04-11',
   '2024-05-01','2024-06-12','2024-06-16','2024-06-17','2024-09-16',
@@ -3505,9 +3487,6 @@ let currentAttendanceMonth     = null;
 let attendanceMonthsLoaded     = false;
 let pendingAttendanceImport    = null;
 
-// ------------------------------------------------------------------
-// Working-day helper (mirrors the backend)
-// ------------------------------------------------------------------
 function _attendanceToDateStr(d) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -3521,9 +3500,6 @@ function _attendanceIsWorkingDay(d) {
   return !ATTENDANCE_PUBLIC_HOLIDAYS.has(_attendanceToDateStr(d));
 }
 
-// ------------------------------------------------------------------
-// Classification using configurable thresholds
-// ------------------------------------------------------------------
 function classifyAttendance(pct) {
   const t = cachedAttendanceThresholds;
   if (pct >= 100)         return { label: 'Perfect',   cls: 'badge-approved', color: '#16A34A' };
@@ -3533,14 +3509,11 @@ function classifyAttendance(pct) {
   return                         { label: 'Warning',   cls: 'badge-rejected', color: '#DC2626' };
 }
 
-// ------------------------------------------------------------------
-// Loaders
-// ------------------------------------------------------------------
 async function loadAttendanceThresholds() {
   try {
     const res = await fetch(`${API_BASE}/admin/attendance/settings`);
     if (res.ok) cachedAttendanceThresholds = await res.json();
-  } catch (_) { /* keep defaults */ }
+  } catch (_) { }
 }
 
 async function loadAttendanceMonths() {
@@ -3564,7 +3537,6 @@ async function loadAttendanceMonths() {
       `<option value="${m.year}-${m.month}">${ATTENDANCE_MONTH_NAMES[m.month - 1]} ${m.year}</option>`
     ).join('');
 
-    // Preserve current selection if still present; else pick newest
     if (currentAttendanceYear && currentAttendanceMonth) {
       const key = `${currentAttendanceYear}-${currentAttendanceMonth}`;
       if (months.find(m => `${m.year}-${m.month}` === key)) {
@@ -3612,9 +3584,6 @@ async function loadAttendanceRecords() {
 }
 
 async function initAttendancePage() {
-  // Reveal the manage-only buttons for users with attendance.manage.
-  // They ship hidden in the HTML, so a viewer-only role never sees
-  // them flash on screen.
   const canManage = hasFrontendPermission('attendance.manage');
   const manageBtnIds = [
     'attendanceImportBtn',
@@ -3634,9 +3603,6 @@ async function initAttendancePage() {
   await loadAttendanceRecords();
 }
 
-// ------------------------------------------------------------------
-// Filters + table render
-// ------------------------------------------------------------------
 function resetAttendanceFilters() {
   const s = document.getElementById('attendanceSearchInput');
   const f = document.getElementById('attendanceStatusFilter');
@@ -3700,7 +3666,7 @@ function applyAttendanceFilters() {
         <td style="text-align:center;">${r.working_days}</td>
         <td style="text-align:center;font-weight:800;color:${cls.color};">${pct.toFixed(2)}%</td>
         <td><span class="status-badge ${cls.cls}">${cls.label}</span></td>
-                <td>
+        <td>
           <button class="action-btn btn-edit"
                   onclick="openAttendanceDetail('${fileSafe}')">View Grid</button>
           ${hasFrontendPermission('attendance.manage') ? `
@@ -3760,9 +3726,6 @@ function renderAttendanceMetrics(records) {
   `;
 }
 
-// ------------------------------------------------------------------
-// Detail modal — day-by-day grid
-// ------------------------------------------------------------------
 async function openAttendanceDetail(fileNo) {
   if (!currentAttendanceYear || !currentAttendanceMonth) return;
 
@@ -3841,7 +3804,6 @@ async function openAttendanceDetail(fileNo) {
       const working = _attendanceIsWorkingDay(date);
       const v = days[d - 1] || '';
 
-            // Rule: P = green; A or blank = red (both shown as 'A').
       let bg, color, label;
       if (!working) {
         bg = 'rgba(148,163,184,0.12)'; color = 'var(--text-muted)'; label = '·';
@@ -3877,9 +3839,6 @@ async function openAttendanceDetail(fileNo) {
   }
 }
 
-// ------------------------------------------------------------------
-// Import flow
-// ------------------------------------------------------------------
 function openAttendanceImportModal() {
   const now = new Date();
   document.getElementById('attendanceImportMonth').value = now.getMonth() + 1;
@@ -3905,16 +3864,11 @@ function parseAttendanceText(text) {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
   if (!lines.length) return { rows: [], skippedHeader: false };
 
-  // Split the first line the same way we'll split every line.
   const firstLine = lines[0];
   const firstParts = (firstLine.includes('\t')
     ? firstLine.split('\t')
     : firstLine.split(',')).map(p => p.trim());
 
-  // A real header has these traits:
-  //   1. First cell is literally "name" or "full name" (or contains "full name")
-  //   2. Second cell mentions "file" or "isse file"
-  // A data row will have a person's name in cell 1, so this check is safe.
   const firstCell  = (firstParts[0] || '').toLowerCase();
   const secondCell = (firstParts[1] || '').toLowerCase();
 
@@ -3969,7 +3923,6 @@ async function previewAttendanceImport() {
     return;
   }
 
-  // Fetch staff to validate file numbers
   const staffRes = await fetch(`${API_BASE}/admin/staff`);
   const staffList = await staffRes.json();
   const staffMap = new Map();
@@ -3985,9 +3938,6 @@ async function previewAttendanceImport() {
       return;
     }
 
-        // Build the working-day calendar list for this month.
-    // The biometric sheet has ONLY working-day columns, so pasted cell N
-    // maps to workingDaysList[N-1] — a specific calendar day.
     const workingDaysList = [];
     for (let d = 1; d <= daysInMonth; d++) {
       if (_attendanceIsWorkingDay(new Date(year, month - 1, d))) {
@@ -3996,7 +3946,6 @@ async function previewAttendanceImport() {
     }
     const expectedWorkingDays = workingDaysList.length;
 
-    // Validate + normalise the pasted working-day cells.
     const normalisedWorking = [];
     for (let wd = 0; wd < expectedWorkingDays; wd++) {
       const raw = r.days[wd];
@@ -4011,9 +3960,6 @@ async function previewAttendanceImport() {
       }
     }
 
-        // Calculate directly from the working-day cells (no expansion here).
-    // The backend performs its own expansion on receipt.
-    // Rule: P = Present; A or blank = Absent.
     let present = 0, absent = 0, provided = 0;
     for (let wd = 0; wd < expectedWorkingDays; wd++) {
       const v = normalisedWorking[wd];
@@ -4028,8 +3974,6 @@ async function previewAttendanceImport() {
       fullName:     staff.full_name || r.fullName,
       isseFileNo:   staff.isse_file_no,
       department:   staff.department || '',
-      // Send working-day cells — the backend will expand them into
-      // the full calendar-day array before storing.
       days:         normalisedWorking,
       presentDays:  present,
       absentDays:   absent,
@@ -4085,7 +4029,7 @@ async function previewAttendanceImport() {
 
   html += `</tbody></table></div>`;
 
-    if (partialRows > 0) {
+  if (partialRows > 0) {
     html += `
       <div style="margin-top: 10px; padding: 10px 12px; background: rgba(245,158,11,0.12);
                   border-left: 3px solid #F59E0B; border-radius: 3px; font-size: 0.8rem;">
@@ -4142,15 +4086,13 @@ async function confirmAttendanceImport() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Import failed.');
 
-    // Jump the picker to the month we just imported
     currentAttendanceYear  = pendingAttendanceImport.year;
     currentAttendanceMonth = pendingAttendanceImport.month;
     attendanceMonthsLoaded = false;
     pendingAttendanceImport = null;
 
-        closeModal('attendanceImportModal');
+    closeModal('attendanceImportModal');
 
-    // Compose a message that also lists any rows the backend skipped.
     let msg = data.message || `Imported ${data.imported} records.`;
     if (data.skipped > 0 && Array.isArray(data.errors) && data.errors.length > 0) {
       const preview = data.errors.slice(0, 5).map(e => {
@@ -4173,9 +4115,6 @@ async function confirmAttendanceImport() {
   }
 }
 
-// ------------------------------------------------------------------
-// Threshold settings modal
-// ------------------------------------------------------------------
 async function openAttendanceSettingsModal() {
   await loadAttendanceThresholds();
   document.getElementById('attendanceExcellentThreshold').value = cachedAttendanceThresholds.excellent;
@@ -4218,9 +4157,6 @@ async function saveAttendanceSettings() {
   }
 }
 
-// ------------------------------------------------------------------
-// CSV export
-// ------------------------------------------------------------------
 function exportAttendanceCSV() {
   if (!cachedAttendanceRecords.length) {
     showAlert('No attendance records to export.');
@@ -4260,19 +4196,12 @@ function exportAttendanceCSV() {
   showAlert(`Exported ${cachedAttendanceRecords.length} attendance records.`);
 }
 
-// ------------------------------------------------------------------
-// Wire up month picker (runs once on load)
-// ------------------------------------------------------------------
-// ------------------------------------------------------------------
-// Delete entire month (admin)
-// ------------------------------------------------------------------
 async function confirmDeleteAttendanceMonth() {
   if (!currentAttendanceYear || !currentAttendanceMonth) {
     showAlert('No month is currently selected.');
     return;
   }
 
-  // Refresh the record list first so the count is accurate
   try {
     const res = await fetch(
       `${API_BASE}/admin/attendance?year=${currentAttendanceYear}&month=${currentAttendanceMonth}`
@@ -4280,7 +4209,7 @@ async function confirmDeleteAttendanceMonth() {
     if (res.ok) {
       cachedAttendanceRecords = await res.json();
     }
-  } catch (_) { /* proceed with whatever we have cached */ }
+  } catch (_) { }
 
   const recordCount = cachedAttendanceRecords.length;
 
@@ -4328,8 +4257,6 @@ async function executeDeleteAttendanceMonth() {
     closeDeleteAttendanceMonthModal();
     showAlert(data.message || `Deleted ${data.deleted || 0} record(s) for ${monthLabel}.`);
 
-    // Refresh the month dropdown and reset the current selection,
-    // because this month may have just disappeared entirely.
     attendanceMonthsLoaded = false;
     currentAttendanceYear  = null;
     currentAttendanceMonth = null;
@@ -4339,20 +4266,12 @@ async function executeDeleteAttendanceMonth() {
     if (btn) { btn.disabled = false; btn.textContent = orig; }
   }
 }
-// ------------------------------------------------------------------
-// Per-record edit (admin)
-// ------------------------------------------------------------------
+
 let _editingAttendance = null;
 
 function openAttendanceEditModal(fileNo) {
   if (!currentAttendanceYear || !currentAttendanceMonth) return;
 
-  // Reset the Save button to a clean state. It lives in static HTML
-  // (outside the re-rendered #editAttendanceRecordBody), so a previous
-  // save that disabled it and set the label to "Saving..." persists
-  // across open/close cycles. Without this reset, the button stays
-  // stuck — and a disabled button swallows all clicks, so save does
-  // nothing until the page is reloaded.
   const saveBtn = document.getElementById('editAttendanceRecordSaveBtn');
   if (saveBtn) {
     saveBtn.disabled = false;
@@ -4371,14 +4290,11 @@ function openAttendanceEditModal(fileNo) {
   const month = currentAttendanceMonth;
   const daysInMonth = new Date(year, month, 0).getDate();
 
-  // Build the working-day calendar list for the month.
   const workingDaysList = [];
   for (let d = 1; d <= daysInMonth; d++) {
     if (_attendanceIsWorkingDay(new Date(year, month - 1, d))) workingDaysList.push(d);
   }
 
-  // Extract current P/A values for each working day.
-  // Blank → 'A' (matching the stored rule that blank = absent).
   const days = Array.isArray(record.days) ? record.days : [];
   const values = workingDaysList.map(calDay => {
     const v = days[calDay - 1] || '';
@@ -4403,7 +4319,6 @@ function renderAttendanceEditModal() {
   document.getElementById('editAttendanceRecordTitle').textContent =
     `Edit Attendance — ${fullName} (${ATTENDANCE_MONTH_NAMES[month - 1]} ${year})`;
 
-  // Live summary
   let present = 0, absent = 0;
   values.forEach(v => { if (v === 'P') present++; else absent++; });
   const working = values.length;
@@ -4530,14 +4445,11 @@ async function saveAttendanceEdit() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Save failed.');
 
-        closeEditAttendanceRecordModal();
+    closeEditAttendanceRecordModal();
     showAlert(data.message || 'Attendance record updated.');
 
-    // Refresh the table so the updated counts and % appear
     await loadAttendanceRecords();
 
-    // The button is reset on next modal open, but restore it here too
-    // so the DOM is left in a clean state either way.
     if (btn) { btn.disabled = false; btn.textContent = 'Save Changes'; }
   } catch (err) {
     showAlert(err.message);
@@ -4545,9 +4457,6 @@ async function saveAttendanceEdit() {
   }
 }
 
-// ------------------------------------------------------------------
-// Per-record delete (admin)
-// ------------------------------------------------------------------
 let _deleteAttendanceTarget = null;
 
 function confirmDeleteAttendanceRecord(fileNo) {
@@ -4586,7 +4495,7 @@ async function executeDeleteAttendanceRecord() {
   const orig = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = 'Deleting...'; }
 
-    try {
+  try {
     const res = await fetch(
       `${API_BASE}/admin/attendance/record?fileNo=${encodeURIComponent(fileNo)}&year=${year}&month=${month}`,
       { method: 'DELETE' }
@@ -4597,7 +4506,6 @@ async function executeDeleteAttendanceRecord() {
     closeDeleteAttendanceRecordModal();
     showAlert(data.message || 'Attendance record deleted.');
 
-    // Refresh the current month's records + metrics + dropdown
     attendanceMonthsLoaded = false;
     await loadAttendanceMonths();
     await loadAttendanceRecords();
@@ -4623,13 +4531,10 @@ document.addEventListener('DOMContentLoaded', () => {
 // ============================================================
 // STAFF ENQUIRIES BADGE
 // ============================================================
-// Sidebar bubble showing how many staff enquiries are still
-// unread. Refreshed by refreshDashboard() on the same 10-second
-// polling interval as the other badges.
 
 async function refreshStaffEnquiriesBadge() {
   if (!currentAdminUser) return;
-  if (!hasFrontendPermission('staff_enquiries.manage')) return;
+  if (!hasFrontendPermission('staff_enquiries.manage') && !hasFrontendPermission('staff_enquiries.view')) return;
 
   try {
     const res = await fetch(`${API_BASE}/admin/staff-enquiries/unread-count`);
@@ -4646,9 +4551,7 @@ async function refreshStaffEnquiriesBadge() {
     } else {
       badge.style.display = 'none';
     }
-  } catch (_) {
-    /* silent — the badge just won't update this cycle */
-  }
+  } catch (_) { }
 }
 
 window.refreshStaffEnquiriesBadge = refreshStaffEnquiriesBadge;
@@ -4694,7 +4597,6 @@ function staffEnquiryStatusBadge(status) {
   return '<span class="status-badge" style="background:rgba(220,38,38,0.15); color:#DC2626; border:1px solid #DC2626;">Unread</span>';
 }
 
-// ---- Load list ----
 async function loadStaffEnquiriesPage() {
   const tbody = document.getElementById('enquiriesTableBody');
   if (!tbody) return;
@@ -4713,7 +4615,6 @@ async function loadStaffEnquiriesPage() {
   }
 }
 
-// ---- Filters + render ----
 function resetStaffEnquiriesFilters() {
   const s = document.getElementById('enquiriesSearchInput');
   const f = document.getElementById('enquiriesStatusFilter');
@@ -4798,7 +4699,6 @@ function applyStaffEnquiriesFilters() {
   }).join('');
 }
 
-// ---- Detail modal ----
 async function openStaffEnquiryDetail(enquiryId) {
   currentEnquiryId = enquiryId;
 
@@ -4816,8 +4716,6 @@ async function openStaffEnquiryDetail(enquiryId) {
     if (!res.ok) throw new Error('Failed to load enquiry.');
     const e = await res.json();
 
-    // Backend flips 'unread' → 'not replied' when we GET the detail.
-    // Refresh the list + badge so the sidebar reflects the change.
     if (e.status === 'not replied' && cachedStaffEnquiries.some(x => x.id === enquiryId && x.status === 'unread')) {
       const cached = cachedStaffEnquiries.find(x => x.id === enquiryId);
       if (cached) cached.status = 'not replied';
@@ -4828,7 +4726,7 @@ async function openStaffEnquiryDetail(enquiryId) {
       titleEl.textContent = `Enquiry ${e.subject && e.subject.trim() ? '· ' + e.subject : '#SE-' + e.id}`;
     }
 
-    const hasPermission = hasFrontendPermission('staff_enquiries.manage');
+    const hasManagePermission = hasFrontendPermission('staff_enquiries.manage');
 
     let html = `
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 18px; padding: 14px 16px; background: var(--bg-main); border-radius: 8px; border: 1px solid var(--border-color);">
@@ -4866,7 +4764,7 @@ async function openStaffEnquiryDetail(enquiryId) {
           <div style="font-size: 0.72rem; color: var(--text-muted); text-align: right;">${formatEnquiryDate(e.reply.created_at)}</div>
         </div>
       `;
-    } else if (hasPermission) {
+    } else if (hasManagePermission) {
       html += `
         <div style="border-top: 1px solid var(--border-color); padding-top: 16px;">
           <label for="staffEnquiryReplyText" style="font-size: 0.85rem; font-weight: 700; color: var(--accent-gold); text-transform: uppercase; letter-spacing: 0.4px; display: block; margin-bottom: 8px;">
@@ -4885,7 +4783,7 @@ async function openStaffEnquiryDetail(enquiryId) {
     } else {
       html += `
         <div style="background: rgba(148,163,184,0.08); padding: 12px 14px; border-radius: 6px; font-size: 0.85rem; color: var(--text-muted);">
-          You do not have permission to reply to this enquiry.
+          You do not have permission to reply to this enquiry (view-only access).
         </div>
       `;
     }
@@ -4903,7 +4801,6 @@ function closeStaffEnquiryModal() {
   currentEnquiryId = null;
 }
 
-// ---- Send reply + fire EmailJS ----
 async function sendStaffEnquiryReply(enquiryId) {
   if (!hasFrontendPermission('staff_enquiries.manage')) {
     showAlert('You do not have permission to reply to enquiries.');
@@ -4937,8 +4834,6 @@ async function sendStaffEnquiryReply(enquiryId) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to send reply.');
 
-    // Fire the email via EmailJS — same service + template as the
-    // website's admin panel, fired client-side.
     let emailSent = false;
     let emailError = null;
 
@@ -4981,12 +4876,10 @@ async function sendStaffEnquiryReply(enquiryId) {
       }
     }
 
-    // Update the cached row + refresh the list view
     const cached = cachedStaffEnquiries.find(x => x.id === enquiryId);
     if (cached) cached.status = 'replied';
     if (typeof applyStaffEnquiriesFilters === 'function') applyStaffEnquiriesFilters();
 
-    // Reload the modal in read-only "replied" state
     setTimeout(() => {
       openStaffEnquiryDetail(enquiryId);
       refreshStaffEnquiriesBadge();
@@ -5004,7 +4897,6 @@ async function sendStaffEnquiryReply(enquiryId) {
   }
 }
 
-// Close on backdrop click
 document.addEventListener('click', function(e) {
   const modal = document.getElementById('staffEnquiryModal');
   if (modal && e.target === modal) {
@@ -5044,7 +4936,6 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btn) btn.addEventListener('click', toggleAdminSidebarDrawer);
   if (backdrop) backdrop.addEventListener('click', closeAdminSidebarDrawer);
 
-  // Auto-close the drawer when a nav item is picked on mobile
   document.querySelectorAll('#adminSidebarNav .nav-item').forEach(el => {
     el.addEventListener('click', () => {
       if (window.matchMedia('(max-width: 767px)').matches) {
@@ -5053,12 +4944,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // On resize past the mobile breakpoint, close the drawer
   window.addEventListener('resize', () => {
     if (window.innerWidth > 767) closeAdminSidebarDrawer();
   });
 
-  // Escape closes it
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeAdminSidebarDrawer();
   });

@@ -53,11 +53,6 @@ const ALL_LEAVE_TYPES = [
   { key: 'Demo Leave (Minutes)',            label: 'Demo Leave (Testing)' }
 ];
 
-// Resolve required working days for a given leave type.
-// 1) Exact map hit.
-// 2) Parse "(N Working Days)" out of the type string.
-// 3) Parse "(N Days)" for other patterns.
-// 4) Fallback: 1.
 function parseWorkingDaysFromType(leaveType) {
   if (!leaveType) return 1;
   if (LEAVE_DAYS_MAP[leaveType]) return LEAVE_DAYS_MAP[leaveType];
@@ -71,9 +66,6 @@ function parseWorkingDaysFromType(leaveType) {
   return 1;
 }
 
-// Generates a fresh staff password of the form Isse-XXXX-XXXX.
-// Excludes look-alike characters (0/O, 1/l/I) so it's easy to read
-// aloud or copy by hand.
 function generateStaffPassword() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
   const pick = () => chars[Math.floor(Math.random() * chars.length)];
@@ -171,9 +163,6 @@ function createNotification(recipientType, recipientId, title, message, linkSect
   });
 }
 
-// Marks all unread notifications tied to a specific request as read.
-// Pass recipientType to only mark notifications for a specific role
-// (e.g. 'hou' after HOU action, 'hoa' after HOA action).
 function markNotificationsReadForRequest(requestId, recipientType = null) {
   if (!requestId) return;
   let sql = `UPDATE notifications SET is_read = 1 WHERE related_request_id = ? AND is_read = 0`;
@@ -241,6 +230,19 @@ function requirePermission(key) {
   };
 }
 
+// Accepts an array of permission keys. Passes if the user holds
+// ANY of them (or is a Super Admin). Used on read-only GET routes
+// that should be accessible to both `.view` and `.manage` holders.
+function requireAnyPermission(keys) {
+  return function (req, res, next) {
+    const ctx = req.authContext;
+    if (!ctx) return res.status(401).json({ error: 'Not authenticated.' });
+    if (ctx.authority === 'full') return next();
+    if (keys.some(k => ctx.permissions.has(k))) return next();
+    return res.status(403).json({ error: `You do not have the required permission.` });
+  };
+}
+
 function departmentFilterFor(req) {
   const ctx = req.authContext;
   if (!ctx) return null;
@@ -248,9 +250,6 @@ function departmentFilterFor(req) {
   return ctx.user.department || null;
 }
 
-// Maps a workflow authority level to the equivalent view role used
-// by the read routes. Keeps the read-route logic unchanged while
-// ignoring any role/department sent from the client.
 function viewRoleFor(ctx) {
   if (!ctx) return 'anonymous';
   if (ctx.authority === 'full') return 'super_admin';
@@ -260,10 +259,10 @@ function viewRoleFor(ctx) {
 }
 
 // ==========================================
-// ROLES CRUD (Super Admin only)
+// ROLES CRUD
 // ==========================================
 
-app.get('/api/admin/roles', requireAuth, requirePermission('settings.manage'), (req, res) => {
+app.get('/api/admin/roles', requireAuth, requireAnyPermission(['roles.view', 'settings.manage']), (req, res) => {
   db.all(
     `SELECT r.id, r.title, r.description, r.workflow_authority, r.scope,
             r.is_protected, r.created_at,
@@ -279,7 +278,7 @@ app.get('/api/admin/roles', requireAuth, requirePermission('settings.manage'), (
   );
 });
 
-app.get('/api/admin/permissions', requireAuth, requirePermission('settings.manage'), (req, res) => {
+app.get('/api/admin/permissions', requireAuth, requireAnyPermission(['roles.view', 'settings.manage']), (req, res) => {
     const PERMISSION_CATALOG = [
     { key: 'leave.view',                 label: 'View Leave Requests',          group: 'Leave' },
     { key: 'leave.endorse',              label: 'Endorse Leave (HOU)',          group: 'Leave', workflow: 'unit' },
@@ -293,21 +292,28 @@ app.get('/api/admin/permissions', requireAuth, requirePermission('settings.manag
     { key: 'staff.add',                  label: 'Add Staff',                    group: 'Staff' },
     { key: 'staff.edit',                 label: 'Edit Staff',                   group: 'Staff' },
     { key: 'staff.delete',               label: 'Delete Staff',                 group: 'Staff' },
+    { key: 'departments.view',           label: 'View Departments',             group: 'Administration' },
     { key: 'departments.manage',         label: 'Manage Departments',           group: 'Administration' },
+    { key: 'officers.view',              label: 'View Approval Officers',       group: 'Administration' },
     { key: 'officers.manage',            label: 'Manage Approval Officers',     group: 'Administration' },
     { key: 'reports.view',               label: 'View Reports',                 group: 'Reports' },
     { key: 'reports.export',             label: 'Export Reports',               group: 'Reports' },
     { key: 'documents.view',             label: 'View HR Documents',            group: 'Documents' },
     { key: 'documents.download',         label: 'Download HR Documents',        group: 'Documents' },
-        { key: 'notifications.view',         label: 'View Notifications',           group: 'System' },
+    { key: 'notifications.view',         label: 'View Notifications',           group: 'System' },
     { key: 'approval_history.view',      label: 'View Approval History',        group: 'System' },
     { key: 'audit.view',                 label: 'View Audit Log',               group: 'System' },
+    { key: 'settings.view',              label: 'View System Settings',         group: 'System' },
     { key: 'settings.manage',            label: 'Manage System Settings',       group: 'System' },
+    { key: 'roles.view',                 label: 'View Roles',                   group: 'System' },
+    { key: 'users.view',                 label: 'View Admin Accounts',          group: 'System' },
+    { key: 'staff_enquiries.view',       label: 'View Staff Enquiries',         group: 'Communication' },
     { key: 'staff_enquiries.manage',     label: 'Manage Staff Enquiries',       group: 'Communication' }
   ];
   res.json(PERMISSION_CATALOG);
 });
-app.get('/api/admin/roles/:id/permissions', requireAuth, requirePermission('settings.manage'), (req, res) => {
+
+app.get('/api/admin/roles/:id/permissions', requireAuth, requireAnyPermission(['roles.view', 'settings.manage']), (req, res) => {
   db.all(
     `SELECT permission_key FROM role_permissions WHERE role_id = ?`,
     [req.params.id],
@@ -374,8 +380,6 @@ app.put('/api/admin/roles/:id', requireAuth, requirePermission('settings.manage'
     if (err || !role) return res.status(404).json({ error: 'Role not found.' });
 
     if (role.is_protected) {
-      // Protected roles can have permissions and description edited,
-      // but not title / authority / scope — that would break the workflow.
       db.run(
         `UPDATE roles SET description = ?, updated_at = NOW() WHERE id = ?`,
         [description || null, id],
@@ -456,11 +460,14 @@ app.delete('/api/admin/roles/:id', requireAuth, requirePermission('settings.mana
 // 1. AUTHENTICATION & SESSION ENDPOINTS
 // ==========================================
 
+// Heartbeat only updates last_seen. It must never touch is_active —
+// that flag is the account-enabled bit and only the Super Admin
+// changes it (via user management).
 app.post('/api/admin/heartbeat', (req, res) => {
   const { userId } = req.body;
   if (!userId) return res.status(400).json({ error: 'User ID required' });
 
-  db.run(`UPDATE users SET is_active = 1, last_seen = NOW() WHERE id = ?`, [userId], (err) => {
+  db.run(`UPDATE users SET last_seen = NOW() WHERE id = ?`, [userId], (err) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json({ success: true });
   });
@@ -490,13 +497,11 @@ app.post('/api/auth/staff-login', (req, res) => {
       return res.status(401).json({ error: 'Incorrect password. Please try again.' });
     }
 
-    // Never send the password back to the client.
     const { password: _ignored, ...safeStaff } = staff;
     res.json({ message: 'Login successful', staff: safeStaff });
   });
 });
 
-// Staff changes their own password from their portal.
 app.post('/api/auth/staff-change-password', (req, res) => {
   const { isseFileNo, currentPassword, newPassword } = req.body || {};
 
@@ -544,6 +549,11 @@ app.post('/api/auth/admin-login', (req, res) => {
       return res.status(500).json({ error: 'Internal server error.' });
     }
     if (!user) return res.status(401).json({ error: 'Invalid email or password.' });
+
+    // Block login if the account has been deactivated by a Super Admin.
+    if (user.is_active === 0 || user.is_active === false) {
+      return res.status(403).json({ error: 'Your account has been deactivated. Please contact the Super Admin.' });
+    }
 
     let ctx;
     try {
@@ -621,6 +631,7 @@ app.get('/api/auth/session', async (req, res) => {
     res.status(500).json({ error: 'Session verification failed.' });
   }
 });
+
 app.get('/api/auth/permissions', async (req, res) => {
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
@@ -686,27 +697,24 @@ app.post('/api/admin/reset-password', (req, res) => {
 // 2. USER MANAGEMENT
 // ==========================================
 
-app.get('/api/admin/sessions', requireAuth, requirePermission('settings.manage'), (req, res) => {
-  db.run(
-    `UPDATE users SET is_active = 0 WHERE last_seen < NOW() - INTERVAL '2 minutes'`,
-    () => {
-      db.all(
-        `SELECT u.id, u.username, u.email, u.is_active, u.last_seen, u.created_at,
-                r.title AS role_title
-         FROM users u
-         LEFT JOIN roles r ON r.id = u.role_id
-         ORDER BY u.is_active DESC, u.username ASC`,
-        [],
-        (err, rows) => {
-          if (err) return res.status(500).json({ error: err.message });
-          res.json(rows);
-        }
-      );
+// Sessions list — "online" is derived from last_seen, not is_active.
+// (is_active is the account-enabled flag, not a presence indicator.)
+app.get('/api/admin/sessions', requireAuth, requireAnyPermission(['users.view', 'settings.manage']), (req, res) => {
+  db.all(
+    `SELECT u.id, u.username, u.email, u.is_active, u.last_seen, u.created_at,
+            r.title AS role_title
+     FROM users u
+     LEFT JOIN roles r ON r.id = u.role_id
+     ORDER BY u.last_seen DESC NULLS LAST, u.username ASC`,
+    [],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json(rows);
     }
   );
 });
 
-app.get('/api/admin/users', requireAuth, requirePermission('settings.manage'), (req, res) => {
+app.get('/api/admin/users', requireAuth, requireAnyPermission(['users.view', 'settings.manage']), (req, res) => {
   db.all(
     `SELECT u.id, u.username, u.email, u.department, u.is_active, u.last_seen, u.created_at,
             u.role_id, r.title AS role_title, r.workflow_authority, r.scope
@@ -747,7 +755,6 @@ app.post('/api/admin/users', requireAuth, requirePermission('settings.manage'), 
           }
           return res.status(500).json({ error: err.message });
         }
-        // Sync the department's assigned_hou if this is a department-scoped role
         if (role.scope === 'department' && dept && dept !== 'All Units') {
           db.run(`UPDATE departments SET assigned_hou = ? WHERE LOWER(name) = LOWER(?)`, [username.trim(), dept]);
         }
@@ -795,7 +802,6 @@ app.put('/api/admin/users/:id', requireAuth, requirePermission('settings.manage'
         }
         return res.status(500).json({ error: err.message });
       }
-      // Sync the department's assigned_hou if this is a department-scoped role
       if (role.scope === 'department' && dept && dept !== 'All Units') {
         db.run(`UPDATE departments SET assigned_hou = ? WHERE LOWER(name) = LOWER(?)`, [username.trim(), dept]);
       }
@@ -963,8 +969,7 @@ app.post('/api/admin/staff/bulk', requireAuth, requireWorkflow('unit'), (req, re
   }
 
   const deptFilter = departmentFilterFor(req);
-  
-  // Validate all entries first
+
   for (const s of staffList) {
     if (!s.isseFileNo || !s.fullName || !s.department || !s.designation || !s.gradeLevel) {
       return res.status(400).json({ error: 'Missing required fields in bulk data.' });
@@ -980,9 +985,8 @@ app.post('/api/admin/staff/bulk', requireAuth, requireWorkflow('unit'), (req, re
 
   const insertNext = (index) => {
     if (index >= staffList.length) {
-      // Done
       logAudit(req.authUser.username, req.authContext.role.title, 'BULK_STAFF_IMPORTED', null, `Imported ${successCount} staff members`);
-      return res.json({ 
+      return res.json({
         message: `Bulk import complete. ${successCount} added, ${failCount} failed.`,
         successCount,
         failCount,
@@ -1015,17 +1019,7 @@ app.post('/api/admin/staff/bulk', requireAuth, requireWorkflow('unit'), (req, re
 // ==========================================
 // 3b-2. STAFF PASSWORD MANAGEMENT (Super Admin only)
 // ==========================================
-// Both endpoints require the Super Admin to re-enter their OWN
-// login password as a secondary confirmation before performing
-// the action.
 
-// Reveal the plaintext password of a staff member.
-// Body: { adminPassword? }
-//   - If adminPassword is provided, it's verified against the
-//     Super Admin's own login password (used by the table-cell
-//     reveal button for a second confirmation).
-//   - If it's omitted, the action proceeds without that check
-//     (used by the View Profile modal, per the supervisor's request).
 app.post('/api/admin/staff/:id/reveal-password',
   requireAuth, requireWorkflow('full'),
   (req, res) => {
@@ -1058,11 +1052,6 @@ app.post('/api/admin/staff/:id/reveal-password',
   }
 );
 
-// Set or regenerate a staff member's password.
-// Body: { adminPassword?, newPassword? }
-//   - adminPassword: optional. When provided, verified.
-//   - newPassword: if provided and non-empty → sets it (min 4 chars);
-//                  otherwise → auto-generates a random password.
 app.patch('/api/admin/staff/:id/password',
   requireAuth, requireWorkflow('full'),
   (req, res) => {
@@ -1137,7 +1126,7 @@ app.post('/api/admin/staff/delete-all', requireAuth, requireWorkflow('full'), (r
 // 4. DEPARTMENTS & OFFICERS
 // ==========================================
 
-app.get('/api/admin/departments', (req, res) => {
+app.get('/api/admin/departments', requireAuth, requireAnyPermission(['departments.view', 'departments.manage']), (req, res) => {
   db.all(
     `SELECT d.*, (SELECT COUNT(*) FROM staff_profiles s WHERE LOWER(s.department) = LOWER(d.name)) AS staff_count FROM departments d ORDER BY name ASC`,
     [],
@@ -1201,7 +1190,7 @@ app.delete('/api/admin/departments/:id', requireAuth, requireWorkflow('full'), (
   });
 });
 
-app.get('/api/admin/officers', requireAuth, requirePermission('settings.manage'), (req, res) => {
+app.get('/api/admin/officers', requireAuth, requireAnyPermission(['officers.view', 'officers.manage', 'settings.manage']), (req, res) => {
   db.all(
     `SELECT u.id, u.username, u.email, u.department, u.is_active, u.created_at,
             r.title AS role_title, r.id AS role_id
@@ -1217,6 +1206,10 @@ app.get('/api/admin/officers', requireAuth, requirePermission('settings.manage')
   );
 });
 
+// New HOU accounts are created ACTIVE by default. The account-enabled
+// flag can be flipped later via User Management. (Previously this
+// endpoint inserted is_active = 0, which — combined with the new
+// login guard — would have permanently locked the new HOU out.)
 app.post('/api/admin/officers/hou', requireAuth, requirePermission('settings.manage'), (req, res) => {
   const { username, email, password, department } = req.body;
   if (!username || !email || !password || !department) {
@@ -1227,7 +1220,7 @@ app.post('/api/admin/officers/hou', requireAuth, requirePermission('settings.man
     if (roleErr || !roleRow) return res.status(500).json({ error: 'Head of Unit role not found in roles table.' });
 
     db.run(
-      `INSERT INTO users (username, email, password, role_id, department, is_active) VALUES (?, ?, ?, ?, ?, 0)`,
+      `INSERT INTO users (username, email, password, role_id, department, is_active) VALUES (?, ?, ?, ?, ?, 1)`,
       [username.trim(), email.trim(), password, roleRow.id, department],
       function (err) {
         if (err) return res.status(400).json({ error: 'Username or Email already exists.' });
@@ -1251,10 +1244,9 @@ app.post('/api/admin/officers/hoa', requireAuth, requirePermission('settings.man
     db.get(`SELECT id FROM roles WHERE title = 'Head of Unit'`, [], (houRoleErr, houRoleRow) => {
       if (houRoleErr || !houRoleRow) return res.status(500).json({ error: 'Head of Unit role not found.' });
 
-      // Demote any existing HOA to HOU (by role_id, not the legacy column)
       db.run(`UPDATE users SET role_id = ? WHERE role_id = ?`, [houRoleRow.id, roleRow.id], () => {
         db.run(
-          `INSERT INTO users (username, email, password, role_id, department, is_active) VALUES (?, ?, ?, ?, 'All Units', 0)`,
+          `INSERT INTO users (username, email, password, role_id, department, is_active) VALUES (?, ?, ?, ?, 'All Units', 1)`,
           [username.trim(), email.trim(), password, roleRow.id],
           function (err) {
             if (err) return res.status(400).json({ error: 'Username or Email already exists.' });
@@ -1270,11 +1262,6 @@ app.post('/api/admin/officers/hoa', requireAuth, requirePermission('settings.man
 // ==========================================
 // 4c. ANNUAL LEAVE ENTITLEMENT STATUS
 // ==========================================
-// Returns how much annual leave a staff member has used and has left
-// for the CURRENT calendar year, accounting for split halves.
-//   mode = 'fresh'          → nothing taken yet — offer Full or First Half
-//   mode = 'half-remaining' → first half taken — offer Second Half only
-//   mode = 'exhausted'      → full entitlement used — block
 
 app.get('/api/leave/annual-status/:fileNo', (req, res) => {
   const fileNo = req.params.fileNo;
@@ -1334,7 +1321,6 @@ app.get('/api/leave/annual-status/:fileNo', (req, res) => {
   );
 });
 
-
 // ==========================================
 // 5. LEAVE SUBMISSION & QUEUES
 // ==========================================
@@ -1349,8 +1335,6 @@ app.post('/api/leave/apply', (req, res) => {
     return res.status(400).json({ error: 'Please provide all required application fields.' });
   }
 
-  // Reject hidden leave types (client hides them from the dropdown;
-  // this stops a stale/malicious client from slipping one through).
   db.get(
     `SELECT setting_value FROM system_settings WHERE setting_key = 'hidden_leave_types'`,
     [],
@@ -1361,270 +1345,246 @@ app.post('/api/leave/apply', (req, res) => {
       }
       if (!Array.isArray(hiddenList)) hiddenList = [];
 
-      // Demo Leave bypasses this check so testing still works during development.
       const isDemo = leaveType.includes('Demo Leave');
       if (!isDemo && hiddenList.includes(leaveType)) {
         return res.status(400).json({ error: 'This leave type is not currently offered. Please pick another.' });
       }
 
-      // Continue with the original logic. Everything below
-      // (Demo branch, working-day calc, insert, etc.) goes inside
-      // this callback.
       handleLeaveApply();
     }
   );
 
   function handleLeaveApply() {
+    if (leaveType.includes('Demo Leave')) {
+      const todayStr = toDateString(new Date());
+      db.run(
+        `INSERT INTO leave_requests (isse_file_no, full_name, department, designation, leave_type, start_date, end_date, total_days, staff_remarks, relieving_officer_name, relieving_officer_file_no, relieving_officer_department)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [isseFileNo, fullName, department, designation, leaveType, todayStr, todayStr, String(totalDays || '0 Minutes'), remarks || null,
+         relievingOfficerName, relievingOfficerFileNo, relievingOfficerDepartment],
+        function (err) {
+          if (err) return res.status(500).json({ error: err.message });
+          const newId = this.lastID;
+          const finish = () => {
+            logAudit(fullName, 'Staff', 'LEAVE_APPLICATION_SUBMITTED', newId, `Filed ${leaveType}`);
+            createNotification('hou', department, 'New Leave Application', `Staff member ${fullName} (${department}) filed a new ${leaveType} request.`, 'houQueueSection', newId);
+            if (relievingOfficerFileNo && String(relievingOfficerFileNo).toLowerCase() !== String(isseFileNo).toLowerCase()) {
+              createNotification(
+                'staff',
+                relievingOfficerFileNo,
+                'Relieving Officer Assignment',
+                `You have been assigned as relieving officer for ${fullName} (${department}) for their ${leaveType}.`,
+                'statusSection',
+                newId
+              );
+            }
+            res.json({ message: 'Demo Leave application submitted successfully', id: newId });
+          };
 
-  // === DEMO LEAVE INTERCEPT ===
-  // Bypass all working-day calculations and annual leave rules for testing
-  if (leaveType.includes('Demo Leave')) {
-    const todayStr = toDateString(new Date());
-    db.run(
-      `INSERT INTO leave_requests (isse_file_no, full_name, department, designation, leave_type, start_date, end_date, total_days, staff_remarks, relieving_officer_name, relieving_officer_file_no, relieving_officer_department)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [isseFileNo, fullName, department, designation, leaveType, todayStr, todayStr, String(totalDays || '0 Minutes'), remarks || null,
-       relievingOfficerName, relievingOfficerFileNo, relievingOfficerDepartment],
-      function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        const newId = this.lastID;
-        const finish = () => {
-          logAudit(fullName, 'Staff', 'LEAVE_APPLICATION_SUBMITTED', newId, `Filed ${leaveType}`);
-          createNotification('hou', department, 'New Leave Application', `Staff member ${fullName} (${department}) filed a new ${leaveType} request.`, 'houQueueSection', newId);
-          if (relievingOfficerFileNo && String(relievingOfficerFileNo).toLowerCase() !== String(isseFileNo).toLowerCase()) {
-            createNotification(
-              'staff',
-              relievingOfficerFileNo,
-              'Relieving Officer Assignment',
-              `You have been assigned as relieving officer for ${fullName} (${department}) for their ${leaveType}.`,
-              'statusSection',
-              newId
-            );
+          if (attachmentId) {
+            db.run(`UPDATE leave_attachments SET leave_request_id = ? WHERE id = ?`,
+              [newId, attachmentId],
+              () => db.run(`UPDATE leave_requests SET attachment_id = ? WHERE id = ?`,
+                [attachmentId, newId],
+                () => finish()));
+          } else {
+            finish();
           }
-          res.json({ message: 'Demo Leave application submitted successfully', id: newId });
-        };
-
-        if (attachmentId) {
-          db.run(`UPDATE leave_attachments SET leave_request_id = ? WHERE id = ?`,
-            [newId, attachmentId],
-            () => db.run(`UPDATE leave_requests SET attachment_id = ? WHERE id = ?`,
-              [attachmentId, newId],
-              () => finish()));
-        } else {
-          finish();
         }
-      }
-    );
-    return;
-  }
-  // === END DEMO LEAVE INTERCEPT ===
-
-  const originalStart = parseLocalDate(startDate);
-  if (!originalStart || isNaN(originalStart.getTime())) {
-    return res.status(400).json({ error: 'Invalid start date supplied.' });
-  }
-
-  const adjustedStart = nextWorkingDay(originalStart);
-  const adjustedStartStr = toDateString(adjustedStart);
-
-  // Moved the insert logic to accept calculated parameters since we need grade level first
-  const insertLeave = (finalLeaveType, finalAdjustedEndStr, finalTotalWorkingDays) => {
-    db.run(
-      `INSERT INTO leave_requests (isse_file_no, full_name, department, designation, leave_type, start_date, end_date, total_days, staff_remarks, relieving_officer_name, relieving_officer_file_no, relieving_officer_department)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [isseFileNo, fullName, department, designation, finalLeaveType, adjustedStartStr, finalAdjustedEndStr, String(finalTotalWorkingDays), remarks || null,
-       relievingOfficerName, relievingOfficerFileNo, relievingOfficerDepartment],
-      function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        const newId = this.lastID;
-        const finish = () => {
-          logAudit(fullName, 'Staff', 'LEAVE_APPLICATION_SUBMITTED', newId,
-            `Filed ${finalLeaveType} (${finalTotalWorkingDays} working days) from ${adjustedStartStr} to ${finalAdjustedEndStr}`);
-          createNotification('hou', department, 'New Leave Application',
-            `Staff member ${fullName} (${department}) filed a new ${finalLeaveType} request.`, 'houQueueSection', newId);
-          if (relievingOfficerFileNo && String(relievingOfficerFileNo).toLowerCase() !== String(isseFileNo).toLowerCase()) {
-            createNotification(
-              'staff',
-              relievingOfficerFileNo,
-              'Relieving Officer Assignment',
-              `You have been assigned as relieving officer for ${fullName} (${department}) for their ${finalLeaveType}.`,
-              'statusSection',
-              newId
-            );
-          }
-          res.json({ message: 'Leave application submitted successfully', id: newId });
-        };
-
-        if (attachmentId) {
-          db.run(`UPDATE leave_attachments SET leave_request_id = ? WHERE id = ?`,
-            [newId, attachmentId],
-            () => db.run(`UPDATE leave_requests SET attachment_id = ? WHERE id = ?`,
-              [attachmentId, newId],
-              () => finish()));
-        } else {
-          finish();
-        }
-      }
-    );
-  };
-
-  const activeLeaveSql = `
-    SELECT id, leave_type FROM leave_requests
-    WHERE LOWER(isse_file_no) = LOWER(?)
-      AND overall_status NOT LIKE '%REJECTED%'
-      AND overall_status NOT LIKE '%CANCELLED%'
-      AND (
-        overall_status LIKE '%PENDING%'
-        OR (end_date >= TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD') AND (resumption_status IS NULL OR resumption_status != 'RESUMPTION APPROVED'))
-      )
-  `;
-
-  db.get(activeLeaveSql, [isseFileNo.trim()], (activeErr, activeRecord) => {
-    if (activeErr) return res.status(500).json({ error: 'Database check failed.' });
-    if (activeRecord) {
-      return res.status(400).json({
-        error: `Public Service Regulation:\nYou currently have an active leave application or ongoing authorized leave in progress (${activeRecord.leave_type}). Please wait until your current leave is concluded before applying again.`
-      });
+      );
+      return;
     }
 
-    // Fetch BOTH gender and grade_level
-    db.get(`SELECT gender, grade_level FROM staff_profiles WHERE LOWER(isse_file_no) = LOWER(?)`, [isseFileNo.trim()], (genderErr, staff) => {
-      const staffGender = staff && staff.gender ? staff.gender : 'Male';
-      let typeLower = leaveType.toLowerCase();
+    const originalStart = parseLocalDate(startDate);
+    if (!originalStart || isNaN(originalStart.getTime())) {
+      return res.status(400).json({ error: 'Invalid start date supplied.' });
+    }
 
-      // ===== CUSTOM LEAVE — use the user-supplied end date and count days =====
-      if (leaveType === 'Custom Leave') {
-        const userEnd = parseLocalDate(endDate);
-        if (!userEnd || isNaN(userEnd.getTime())) {
-          return res.status(400).json({ error: 'Invalid custom end date supplied.' });
-        }
-        if (userEnd < adjustedStart) {
-          return res.status(400).json({ error: 'Custom leave end date must be on or after the start date.' });
-        }
+    const adjustedStart = nextWorkingDay(originalStart);
+    const adjustedStartStr = toDateString(adjustedStart);
 
-        const totalWD = countWorkingDays(adjustedStart, userEnd);
-        if (totalWD <= 0) {
-          return res.status(400).json({ error: 'Custom leave must span at least one working day.' });
-        }
-
-        insertLeave('Custom Leave', toDateString(userEnd), totalWD);
-        return;
-      }
-      // ===== END CUSTOM LEAVE =====
-
-      // DYNAMIC ANNUAL LEAVE CALCULATION
-      let requiredWorkingDays;
-
-      if (typeLower.includes('annual') && staff && staff.grade_level) {
-        const gl = parseInt(String(staff.grade_level).replace(/[^0-9]/g, ''), 10);
-        let fullDays = 30;
-        if (!isNaN(gl)) {
-          if (gl >= 7) fullDays = 30;
-          else if (gl >= 4) fullDays = 21;
-          else fullDays = 14;
-        }
-
-        // If the frontend already provided a specific day count — e.g. a
-        // split half like "Annual Leave - First Half (15 Working Days)" —
-        // trust it and preserve the label. Only fall back to the full
-        // entitlement when the type is a generic "Annual Leave".
-        const frontendProvidedDays = /\(\d+\s+Working\s+Days?\)/i.test(leaveType);
-        const parsedFrontendDays = parseWorkingDaysFromType(leaveType);
-
-        if (frontendProvidedDays && parsedFrontendDays > 0 && parsedFrontendDays <= fullDays) {
-          requiredWorkingDays = parsedFrontendDays;
-          // Keep leaveType unchanged so the split label is preserved in the DB.
-        } else {
-          leaveType = `Annual Leave (${fullDays} Working Days)`;
-          LEAVE_DAYS_MAP[leaveType] = fullDays;
-          typeLower = leaveType.toLowerCase();
-          requiredWorkingDays = fullDays;
-        }
-      } else {
-        requiredWorkingDays = parseWorkingDaysFromType(leaveType);
-      }
-      const adjustedEnd = addWorkingDays(adjustedStart, requiredWorkingDays);
-      const totalWorkingDays = countWorkingDays(adjustedStart, adjustedEnd);
-      const adjustedEndStr = toDateString(adjustedEnd);
-
-      if (typeLower.includes('paternity') && staffGender.toLowerCase() !== 'male') {
-        return res.status(400).json({ error: 'Paternity Leave can strictly be granted to Male officers only.' });
-      }
-      if (typeLower.includes('maternity') && staffGender.toLowerCase() !== 'female') {
-        return res.status(400).json({ error: 'Maternity Leave can strictly be granted to Female officers only.' });
-      }
-
-      if (typeLower.includes('annual')) {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-
-        const diffDays = Math.ceil((adjustedStart.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-        if (diffDays < 14) {
-          return res.status(400).json({ error: 'Annual Leave requires submission at least 14 days prior to the commencement date.' });
-        }
-
-        // Total entitlement based on grade level
-        const gl = parseInt(String((staff && staff.grade_level) || '').replace(/[^0-9]/g, ''), 10);
-        let totalEntitlement = 30;
-        if (!isNaN(gl)) {
-          if (gl >= 7) totalEntitlement = 30;
-          else if (gl >= 4) totalEntitlement = 21;
-          else totalEntitlement = 14;
-        }
-
-        // Days this application is asking for
-        const requestedDays = parseWorkingDaysFromType(leaveType);
-        const startYear = adjustedStartStr.substring(0, 4);
-
-        // Sum days already used for Annual this year (excluding rejected/cancelled)
-        db.all(
-          `SELECT total_days FROM leave_requests
-            WHERE LOWER(isse_file_no) = LOWER(?)
-              AND leave_type LIKE '%Annual%'
-              AND SUBSTR(start_date, 1, 4) = ?
-              AND overall_status NOT LIKE '%REJECTED%'
-              AND overall_status NOT LIKE '%CANCELLED%'`,
-          [isseFileNo.trim(), startYear],
-          (sumErr, rows) => {
-            if (sumErr) return res.status(500).json({ error: 'Database check failed.' });
-
-            let usedDays = 0;
-            (rows || []).forEach(r => {
-              const n = parseInt(String(r.total_days || '').replace(/[^0-9]/g, ''), 10);
-              if (!isNaN(n)) usedDays += n;
-            });
-
-            const remaining = totalEntitlement - usedDays;
-
-            if (remaining <= 0) {
-              return res.status(400).json({
-                error: `You have already used your full annual leave entitlement (${totalEntitlement} working days) for ${startYear}.`
-              });
+    const insertLeave = (finalLeaveType, finalAdjustedEndStr, finalTotalWorkingDays) => {
+      db.run(
+        `INSERT INTO leave_requests (isse_file_no, full_name, department, designation, leave_type, start_date, end_date, total_days, staff_remarks, relieving_officer_name, relieving_officer_file_no, relieving_officer_department)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [isseFileNo, fullName, department, designation, finalLeaveType, adjustedStartStr, finalAdjustedEndStr, String(finalTotalWorkingDays), remarks || null,
+         relievingOfficerName, relievingOfficerFileNo, relievingOfficerDepartment],
+        function (err) {
+          if (err) return res.status(500).json({ error: err.message });
+          const newId = this.lastID;
+          const finish = () => {
+            logAudit(fullName, 'Staff', 'LEAVE_APPLICATION_SUBMITTED', newId,
+              `Filed ${finalLeaveType} (${finalTotalWorkingDays} working days) from ${adjustedStartStr} to ${finalAdjustedEndStr}`);
+            createNotification('hou', department, 'New Leave Application',
+              `Staff member ${fullName} (${department}) filed a new ${finalLeaveType} request.`, 'houQueueSection', newId);
+            if (relievingOfficerFileNo && String(relievingOfficerFileNo).toLowerCase() !== String(isseFileNo).toLowerCase()) {
+              createNotification(
+                'staff',
+                relievingOfficerFileNo,
+                'Relieving Officer Assignment',
+                `You have been assigned as relieving officer for ${fullName} (${department}) for their ${finalLeaveType}.`,
+                'statusSection',
+                newId
+              );
             }
-            if (requestedDays > remaining) {
-              return res.status(400).json({
-                error: `This request would exceed your remaining annual leave entitlement. You have ${remaining} working day(s) left for ${startYear}, but you requested ${requestedDays}.`
-              });
-            }
+            res.json({ message: 'Leave application submitted successfully', id: newId });
+          };
 
-            insertLeave(leaveType, adjustedEndStr, totalWorkingDays);
+          if (attachmentId) {
+            db.run(`UPDATE leave_attachments SET leave_request_id = ? WHERE id = ?`,
+              [newId, attachmentId],
+              () => db.run(`UPDATE leave_requests SET attachment_id = ? WHERE id = ?`,
+                [attachmentId, newId],
+                () => finish()));
+          } else {
+            finish();
           }
-        );
-        return;
+        }
+      );
+    };
+
+    const activeLeaveSql = `
+      SELECT id, leave_type FROM leave_requests
+      WHERE LOWER(isse_file_no) = LOWER(?)
+        AND overall_status NOT LIKE '%REJECTED%'
+        AND overall_status NOT LIKE '%CANCELLED%'
+        AND (
+          overall_status LIKE '%PENDING%'
+          OR (end_date >= TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD') AND (resumption_status IS NULL OR resumption_status != 'RESUMPTION APPROVED'))
+        )
+    `;
+
+    db.get(activeLeaveSql, [isseFileNo.trim()], (activeErr, activeRecord) => {
+      if (activeErr) return res.status(500).json({ error: 'Database check failed.' });
+      if (activeRecord) {
+        return res.status(400).json({
+          error: `Public Service Regulation:\nYou currently have an active leave application or ongoing authorized leave in progress (${activeRecord.leave_type}). Please wait until your current leave is concluded before applying again.`
+        });
       }
 
-      insertLeave(leaveType, adjustedEndStr, totalWorkingDays);
-    });
-  });
+      db.get(`SELECT gender, grade_level FROM staff_profiles WHERE LOWER(isse_file_no) = LOWER(?)`, [isseFileNo.trim()], (genderErr, staff) => {
+        const staffGender = staff && staff.gender ? staff.gender : 'Male';
+        let typeLower = leaveType.toLowerCase();
 
-  }  // end of handleLeaveApply
-});  // end of app.post('/api/leave/apply')
+        if (leaveType === 'Custom Leave') {
+          const userEnd = parseLocalDate(endDate);
+          if (!userEnd || isNaN(userEnd.getTime())) {
+            return res.status(400).json({ error: 'Invalid custom end date supplied.' });
+          }
+          if (userEnd < adjustedStart) {
+            return res.status(400).json({ error: 'Custom leave end date must be on or after the start date.' });
+          }
+
+          const totalWD = countWorkingDays(adjustedStart, userEnd);
+          if (totalWD <= 0) {
+            return res.status(400).json({ error: 'Custom leave must span at least one working day.' });
+          }
+
+          insertLeave('Custom Leave', toDateString(userEnd), totalWD);
+          return;
+        }
+
+        let requiredWorkingDays;
+
+        if (typeLower.includes('annual') && staff && staff.grade_level) {
+          const gl = parseInt(String(staff.grade_level).replace(/[^0-9]/g, ''), 10);
+          let fullDays = 30;
+          if (!isNaN(gl)) {
+            if (gl >= 7) fullDays = 30;
+            else if (gl >= 4) fullDays = 21;
+            else fullDays = 14;
+          }
+
+          const frontendProvidedDays = /\(\d+\s+Working\s+Days?\)/i.test(leaveType);
+          const parsedFrontendDays = parseWorkingDaysFromType(leaveType);
+
+          if (frontendProvidedDays && parsedFrontendDays > 0 && parsedFrontendDays <= fullDays) {
+            requiredWorkingDays = parsedFrontendDays;
+          } else {
+            leaveType = `Annual Leave (${fullDays} Working Days)`;
+            LEAVE_DAYS_MAP[leaveType] = fullDays;
+            typeLower = leaveType.toLowerCase();
+            requiredWorkingDays = fullDays;
+          }
+        } else {
+          requiredWorkingDays = parseWorkingDaysFromType(leaveType);
+        }
+        const adjustedEnd = addWorkingDays(adjustedStart, requiredWorkingDays);
+        const totalWorkingDays = countWorkingDays(adjustedStart, adjustedEnd);
+        const adjustedEndStr = toDateString(adjustedEnd);
+
+        if (typeLower.includes('paternity') && staffGender.toLowerCase() !== 'male') {
+          return res.status(400).json({ error: 'Paternity Leave can strictly be granted to Male officers only.' });
+        }
+        if (typeLower.includes('maternity') && staffGender.toLowerCase() !== 'female') {
+          return res.status(400).json({ error: 'Maternity Leave can strictly be granted to Female officers only.' });
+        }
+
+        if (typeLower.includes('annual')) {
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+
+          const diffDays = Math.ceil((adjustedStart.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+          if (diffDays < 14) {
+            return res.status(400).json({ error: 'Annual Leave requires submission at least 14 days prior to the commencement date.' });
+          }
+
+          const gl = parseInt(String((staff && staff.grade_level) || '').replace(/[^0-9]/g, ''), 10);
+          let totalEntitlement = 30;
+          if (!isNaN(gl)) {
+            if (gl >= 7) totalEntitlement = 30;
+            else if (gl >= 4) totalEntitlement = 21;
+            else totalEntitlement = 14;
+          }
+
+          const requestedDays = parseWorkingDaysFromType(leaveType);
+          const startYear = adjustedStartStr.substring(0, 4);
+
+          db.all(
+            `SELECT total_days FROM leave_requests
+              WHERE LOWER(isse_file_no) = LOWER(?)
+                AND leave_type LIKE '%Annual%'
+                AND SUBSTR(start_date, 1, 4) = ?
+                AND overall_status NOT LIKE '%REJECTED%'
+                AND overall_status NOT LIKE '%CANCELLED%'`,
+            [isseFileNo.trim(), startYear],
+            (sumErr, rows) => {
+              if (sumErr) return res.status(500).json({ error: 'Database check failed.' });
+
+              let usedDays = 0;
+              (rows || []).forEach(r => {
+                const n = parseInt(String(r.total_days || '').replace(/[^0-9]/g, ''), 10);
+                if (!isNaN(n)) usedDays += n;
+              });
+
+              const remaining = totalEntitlement - usedDays;
+
+              if (remaining <= 0) {
+                return res.status(400).json({
+                  error: `You have already used your full annual leave entitlement (${totalEntitlement} working days) for ${startYear}.`
+                });
+              }
+              if (requestedDays > remaining) {
+                return res.status(400).json({
+                  error: `This request would exceed your remaining annual leave entitlement. You have ${remaining} working day(s) left for ${startYear}, but you requested ${requestedDays}.`
+                });
+              }
+
+              insertLeave(leaveType, adjustedEndStr, totalWorkingDays);
+            }
+          );
+          return;
+        }
+
+        insertLeave(leaveType, adjustedEndStr, totalWorkingDays);
+      });
+    });
+  }
+});
 
 // ==========================================
 // STAFF DIRECTORY SEARCH (public, staff-portal autocomplete)
 // ==========================================
-// Returns up to 10 matching staff across all departments.
-// Only exposes name, file no, department — nothing sensitive.
 app.get('/api/staff-directory/search', (req, res) => {
   const q = String(req.query.q || '').trim();
   if (!q || q.length < 2) return res.json([]);
@@ -1715,7 +1675,7 @@ app.get('/api/leave/details/:id', requireAuth, (req, res) => {
 });
 
 // ==========================================
-// WORKFLOW ACTIONS — ENFORCED
+// WORKFLOW ACTIONS
 // ==========================================
 
 app.patch('/api/leave/hou-action', requireAuth, requireWorkflow('unit'), (req, res) => {
@@ -1742,7 +1702,6 @@ app.patch('/api/leave/hou-action', requireAuth, requireWorkflow('unit'), (req, r
         logAudit(req.authUser.username, req.authContext.role.title, isApproved ? 'HOU_ENDORSED' : 'HOU_REJECTED', requestId,
           isApproved ? 'HOU endorsed leave application' : `HOU rejected leave application: ${finalRemarks}`);
 
-        // Notify the APPLICANT on their staff-portal bell.
         if (found.isse_file_no) {
           if (isApproved) {
             createNotification(
@@ -1769,7 +1728,6 @@ app.patch('/api/leave/hou-action', requireAuth, requireWorkflow('unit'), (req, r
           createNotification('hoa', 'all', 'Leave Awaiting HOA Clearance',
             `Leave application #${requestId} endorsed by HOU and awaiting Head of Admin approval.`, 'adminQueueSection', requestId);
         } else {
-          // Rejected — tell the relieving officer they're no longer needed.
           if (found.relieving_officer_file_no) {
             createNotification(
               'staff',
@@ -1808,7 +1766,6 @@ app.patch('/api/leave/admin-action', requireAuth, requireWorkflow('final'), (req
           logAudit(req.authUser.username, req.authContext.role.title, isApproved ? 'ADMIN_APPROVED' : 'ADMIN_REJECTED', requestId,
             isApproved ? 'Head of Admin granted final clearance' : `Head of Admin rejected application: ${finalRemarks}`);
 
-          // Notify the APPLICANT on their staff-portal bell.
           if (leave && leave.isse_file_no) {
             if (isApproved) {
               createNotification(
@@ -1831,7 +1788,6 @@ app.patch('/api/leave/admin-action', requireAuth, requireWorkflow('final'), (req
             }
           }
 
-          // Notify the relieving officer if the leave was rejected.
           if (!isApproved && leave && leave.relieving_officer_file_no) {
             createNotification(
               'staff',
@@ -1854,13 +1810,6 @@ app.patch('/api/leave/admin-action', requireAuth, requireWorkflow('final'), (req
 // ==========================================
 // 6. RESUMPTION WORKFLOW
 // ==========================================
-
-// ==========================================
-// STAFF SELF-SERVICE: CANCEL LEAVE
-// ==========================================
-// Allowed only while the leave is still in the pipeline AND the HOU
-// has not yet acted (hou_status = 'PENDING'). Once HOU endorses or
-// rejects, cancellation is locked out.
 
 app.patch('/api/leave/cancel/:id', (req, res) => {
   const { id } = req.params;
@@ -1904,18 +1853,11 @@ app.patch('/api/leave/cancel/:id', (req, res) => {
         function (err2) {
           if (err2) return res.status(500).json({ error: err2.message });
 
-          logAudit(
-            row.full_name,
-            'Staff',
-            'LEAVE_CANCELLED',
-            id,
-            `Staff cancelled ${row.leave_type} application before HOU review`
-          );
+          logAudit(row.full_name, 'Staff', 'LEAVE_CANCELLED', id,
+            `Staff cancelled ${row.leave_type} application before HOU review`);
 
-          // Clear the HOU's pending notification for this cancelled request.
           markNotificationsReadForRequest(id, 'hou');
 
-          // Notify the relieving officer that they are no longer needed.
           if (row.relieving_officer_file_no) {
             createNotification(
               'staff',
@@ -1933,7 +1875,6 @@ app.patch('/api/leave/cancel/:id', (req, res) => {
     }
   );
 });
-
 
 app.post('/api/leave/notify-resumption', (req, res) => {
   const { requestId, resumptionDate, resumptionRemarks } = req.body;
@@ -1953,7 +1894,6 @@ app.post('/api/leave/notify-resumption', (req, res) => {
         return res.status(400).json({ error: 'Duty resumption has already been fully cleared for this application.' });
       }
 
-      // Reset any previous HOU/HOA verification flags so this is a fresh cycle.
       db.run(
         `UPDATE leave_requests
             SET resumption_status = 'PENDING HOU RESUMPTION APPROVAL',
@@ -2060,7 +2000,7 @@ app.get('/api/leave/attachment/:id', async (req, res) => {
         try {
           const u = await getUserByToken(token);
           if (u) authorized = true;
-        } catch (_) { /* fall through */ }
+        } catch (_) { }
       }
 
       if (!authorized && isseFileNo && row.owner_file_no &&
@@ -2133,7 +2073,6 @@ app.patch('/api/leave/hou-validate-resumption', requireAuth, requireWorkflow('un
         if (err) return res.status(500).json({ error: err.message });
         logAudit(req.authUser.username, req.authContext.role.title, isApproved ? 'HOU_RESUMPTION_VALIDATED' : 'HOU_RESUMPTION_REJECTED', requestId, houRemarks);
 
-        // Notify the APPLICANT on their staff-portal bell.
         if (found.isse_file_no) {
           if (isApproved) {
             createNotification(
@@ -2190,7 +2129,6 @@ app.patch('/api/leave/hoa-validate-resumption', requireAuth, requireWorkflow('fi
           if (err) return res.status(500).json({ error: err.message });
           logAudit(req.authUser.username, req.authContext.role.title, isApproved ? 'HOA_RESUMPTION_APPROVED' : 'HOA_RESUMPTION_REJECTED', requestId, adminRemarks);
 
-          // Notify the APPLICANT on their staff-portal bell.
           if (leave && leave.isse_file_no) {
             if (isApproved) {
               createNotification(
@@ -2236,26 +2174,19 @@ app.get('/api/notifications', requireAuth, (req, res) => {
   const ctx = req.authContext;
   const role = viewRoleFor(ctx);
 
-  // Any role that has the staff-enquiries permission should also see
-  // the 'admin'-type notifications generated when a staff submits an
-  // enquiry. Super Admin already sees everything, so this is only
-  // relevant for HOA / HOU / future custom roles.
+  // Anyone who can see staff enquiries — whether as a viewer or a
+  // manager — should see the resulting notifications.
   const canSeeStaffEnquiries =
     ctx.authority === 'full' ||
-    ctx.permissions.has('staff_enquiries.manage');
+    ctx.permissions.has('staff_enquiries.manage') ||
+    ctx.permissions.has('staff_enquiries.view');
 
-  // Never show staff-portal-only notifications in the admin bell.
-  // Those are fileNo-scoped and are only served by
-  // /api/staff-notifications/:fileNo.
   let sql = `SELECT * FROM notifications WHERE recipient_type != 'staff'`;
   let params = [];
 
   if (role === 'super_admin') {
-    // Super Admin sees every (non-staff) notification — no additional filter.
-
+    // Super Admin sees every (non-staff) notification.
   } else if (role === 'hou') {
-    // HOU sees their own department's 'hou' notifications, plus
-    // 'admin' notifications if they can manage staff enquiries.
     const dept = (ctx.user && ctx.user.department) ? ctx.user.department : '';
     if (canSeeStaffEnquiries) {
       sql += ` AND ((recipient_type = 'hou' AND LOWER(recipient_id) = LOWER(?)) OR recipient_type = 'admin')`;
@@ -2263,19 +2194,13 @@ app.get('/api/notifications', requireAuth, (req, res) => {
       sql += ` AND recipient_type = 'hou' AND LOWER(recipient_id) = LOWER(?)`;
     }
     params.push(dept);
-
   } else if (role === 'head_of_admin') {
-    // HOA sees every 'hoa' notification, plus 'admin' notifications
-    // if they can manage staff enquiries.
     if (canSeeStaffEnquiries) {
       sql += ` AND (recipient_type = 'hoa' OR recipient_type = 'admin')`;
     } else {
       sql += ` AND recipient_type = 'hoa'`;
     }
-
   } else {
-    // Unknown role — only show them 'admin' notifications if they
-    // somehow have the permission; otherwise show nothing.
     if (canSeeStaffEnquiries) {
       sql += ` AND recipient_type = 'admin'`;
     } else {
@@ -2331,7 +2256,6 @@ app.get('/api/staff-notifications/:fileNo/unread-count', (req, res) => {
   );
 });
 
-// Public (fileNo-scoped) — same spirit as the other staff-portal endpoints.
 app.patch('/api/staff-notifications/:id/read', (req, res) => {
   db.run(
     `UPDATE notifications SET is_read = 1 WHERE id = ? AND recipient_type = 'staff'`,
@@ -2350,15 +2274,13 @@ app.patch('/api/notifications/:id/read', requireAuth, (req, res) => {
   });
 });
 
-// Delete a single notification the admin can see
 app.delete('/api/notifications/:id', requireAuth, (req, res) => {
   const ctx = req.authContext;
   const role = viewRoleFor(ctx);
   const canSeeStaffEnquiries =
     ctx.authority === 'full' ||
-    (ctx.permissions && ctx.permissions.has('staff_enquiries.manage'));
+    (ctx.permissions && (ctx.permissions.has('staff_enquiries.manage') || ctx.permissions.has('staff_enquiries.view')));
 
-  // Build the same visibility filter used by the list endpoint
   let where = `id = ? AND recipient_type != 'staff'`;
   const params = [req.params.id];
 
@@ -2389,13 +2311,12 @@ app.delete('/api/notifications/:id', requireAuth, (req, res) => {
   });
 });
 
-// Wipe ALL notifications the current admin can see
 app.delete('/api/notifications/all', requireAuth, (req, res) => {
   const ctx = req.authContext;
   const role = viewRoleFor(ctx);
   const canSeeStaffEnquiries =
     ctx.authority === 'full' ||
-    (ctx.permissions && ctx.permissions.has('staff_enquiries.manage'));
+    (ctx.permissions && (ctx.permissions.has('staff_enquiries.manage') || ctx.permissions.has('staff_enquiries.view')));
 
   let where = `recipient_type != 'staff'`;
   const params = [];
@@ -2465,12 +2386,12 @@ app.get('/api/admin/dashboard-stats', requireAuth, (req, res) => {
                 db.get(`SELECT COUNT(*) AS count FROM leave_requests WHERE resumption_status LIKE '%PENDING%' ${deptClause}`, params, (errRes, rowRes) => {
                   if (!errRes && rowRes) stats.pendingResumptions = rowRes.count;
 
-                db.get(`SELECT COUNT(*) AS count FROM users WHERE is_active = 1`, [], (err4, row4) => {
-                  if (!err4 && row4) stats.activeSessions = row4.count;
-                  res.json(stats);
+                  db.get(`SELECT COUNT(*) AS count FROM users WHERE is_active = 1`, [], (err4, row4) => {
+                    if (!err4 && row4) stats.activeSessions = row4.count;
+                    res.json(stats);
+                  });
                 });
               });
-                });   // <-- ADD THIS: closes the new HOA query
             });
           });
         });
@@ -2487,11 +2408,9 @@ app.get('/api/admin/calendar-events', requireAuth, (req, res) => {
   let params = [];
 
   if (authDeptFilter) {
-    // Department-scoped user (e.g. HOU) — always locked to their own department
     sql += ` AND LOWER(department) = LOWER(?)`;
     params.push(authDeptFilter);
   } else if (queryDept && queryDept !== 'All Units') {
-    // Global-scope user (Super Admin) — honour the dropdown selection
     sql += ` AND LOWER(department) = LOWER(?)`;
     params.push(queryDept);
   }
@@ -2502,7 +2421,6 @@ app.get('/api/admin/calendar-events', requireAuth, (req, res) => {
   });
 });
 
-// Delete a single staff notification (own only)
 app.delete('/api/staff-notifications/:id', (req, res) => {
   db.run(
     `DELETE FROM notifications WHERE id = ? AND recipient_type = 'staff'`,
@@ -2514,7 +2432,6 @@ app.delete('/api/staff-notifications/:id', (req, res) => {
   );
 });
 
-// Wipe ALL notifications for a specific staff member
 app.delete('/api/staff-notifications/all/:fileNo', (req, res) => {
   const fileNo = String(req.params.fileNo || '').trim();
   if (!fileNo) return res.status(400).json({ error: 'File No required.' });
@@ -2539,9 +2456,8 @@ const ATTENDANCE_DEFAULT_THRESHOLDS = { warning: 75, good: 90, excellent: 95 };
 // LEAVE TYPE VISIBILITY SETTINGS
 // ------------------------------------------------------------------
 
-// GET /api/admin/settings/hidden-leave-types — for the settings page
 app.get('/api/admin/settings/hidden-leave-types',
-  requireAuth, requirePermission('settings.manage'),
+  requireAuth, requireAnyPermission(['settings.view', 'settings.manage']),
   (req, res) => {
     db.get(
       `SELECT setting_value FROM system_settings WHERE setting_key = 'hidden_leave_types'`,
@@ -2562,7 +2478,6 @@ app.get('/api/admin/settings/hidden-leave-types',
   }
 );
 
-// PUT /api/admin/settings/hidden-leave-types — Super Admin saves the list
 app.put('/api/admin/settings/hidden-leave-types',
   requireAuth, requirePermission('settings.manage'),
   (req, res) => {
@@ -2571,7 +2486,6 @@ app.put('/api/admin/settings/hidden-leave-types',
       return res.status(400).json({ error: '`hidden` must be an array of leave-type keys.' });
     }
 
-    // Only allow keys from the canonical list (defends against typos/garbage).
     const validKeys = new Set(ALL_LEAVE_TYPES.map(t => t.key));
     const cleaned = hidden.filter(k => validKeys.has(k));
 
@@ -2600,7 +2514,6 @@ app.put('/api/admin/settings/hidden-leave-types',
   }
 );
 
-// Public (staff portal) — returns only the array of hidden keys.
 app.get('/api/settings/hidden-leave-types', (req, res) => {
   db.get(
     `SELECT setting_value FROM system_settings WHERE setting_key = 'hidden_leave_types'`,
@@ -2617,9 +2530,6 @@ app.get('/api/settings/hidden-leave-types', (req, res) => {
   );
 });
 
-// ------------------------------------------------------------------
-// GET /api/admin/attendance/settings
-// ------------------------------------------------------------------
 app.get('/api/admin/attendance/settings',
   requireAuth, requirePermission('attendance.view'),
   (req, res) => {
@@ -2645,9 +2555,6 @@ app.get('/api/admin/attendance/settings',
   }
 );
 
-// ------------------------------------------------------------------
-// PUT /api/admin/attendance/settings
-// ------------------------------------------------------------------
 app.put('/api/admin/attendance/settings',
   requireAuth, requirePermission('attendance.manage'),
   (req, res) => {
@@ -2661,7 +2568,7 @@ app.put('/api/admin/attendance/settings',
       return res.status(400).json({ error: 'No valid thresholds provided.' });
     }
 
-        let done = 0;
+    let done = 0;
     let firstError = null;
 
     pairs.forEach(([key, value]) => {
@@ -2693,9 +2600,6 @@ app.put('/api/admin/attendance/settings',
   }
 );
 
-// ------------------------------------------------------------------
-// GET /api/admin/attendance/months — for the month picker
-// ------------------------------------------------------------------
 app.get('/api/admin/attendance/months',
   requireAuth, requirePermission('attendance.view'),
   (req, res) => {
@@ -2715,9 +2619,6 @@ app.get('/api/admin/attendance/months',
   }
 );
 
-// ------------------------------------------------------------------
-// GET /api/admin/attendance?year=&month= — table data
-// ------------------------------------------------------------------
 app.get('/api/admin/attendance',
   requireAuth, requirePermission('attendance.view'),
   (req, res) => {
@@ -2743,9 +2644,6 @@ app.get('/api/admin/attendance',
   }
 );
 
-// ------------------------------------------------------------------
-// GET /api/admin/attendance/staff/:fileNo?year=&month= — one record
-// ------------------------------------------------------------------
 app.get('/api/admin/attendance/staff/:fileNo',
   requireAuth, requirePermission('attendance.view'),
   (req, res) => {
@@ -2768,10 +2666,6 @@ app.get('/api/admin/attendance/staff/:fileNo',
   }
 );
 
-// ------------------------------------------------------------------
-// POST /api/admin/attendance/import
-// Body: { year, month, rows: [{ fullName, isseFileNo, days: [...] }] }
-// ------------------------------------------------------------------
 app.post('/api/admin/attendance/import',
   requireAuth, requirePermission('attendance.manage'),
   (req, res) => {
@@ -2788,7 +2682,6 @@ app.post('/api/admin/attendance/import',
 
     const daysInMonth = new Date(y, m, 0).getDate();
 
-    // Pre-compute which days of this month are working days
     const isWorkingByIndex = [];
     for (let d = 1; d <= daysInMonth; d++) {
       isWorkingByIndex.push(isWorkingDay(new Date(y, m - 1, d)));
@@ -2824,21 +2717,12 @@ app.post('/api/admin/attendance/import',
             return;
           }
 
-                    // Build the working-day calendar list for this month.
-          // The biometric sheet has ONLY working-day columns, so pasted
-          // cell N maps to workingDaysList[N-1] — a specific calendar day.
-          // Example (Sep 2026): [1, 2, 3, 4, 7, 8, 9, 10, 11, 14, ...]
           const workingDaysList = [];
           for (let d = 1; d <= daysInMonth; d++) {
             if (isWorkingByIndex[d - 1]) workingDaysList.push(d);
           }
           const expectedWorkingDays = workingDaysList.length;
 
-          // Sanity check: the row must supply exactly one cell per working
-          // day for the month. A mismatch means either the paste was
-          // truncated, or a client-side bug sent the wrong shape
-          // (e.g. pre-expanded calendar days). Reject the row so we never
-          // silently store wrong percentages.
           if (rawDays.length !== expectedWorkingDays) {
             errors.push({
               row: i + 1,
@@ -2848,7 +2732,6 @@ app.post('/api/admin/attendance/import',
             return;
           }
 
-          // Validate + normalise the pasted working-day cells.
           const normalisedWorking = [];
           for (let wd = 0; wd < expectedWorkingDays; wd++) {
             const raw = rawDays[wd];
@@ -2866,16 +2749,11 @@ app.post('/api/admin/attendance/import',
             }
           }
 
-          // Expand into a full calendar-day array so the stored `days`
-          // column keeps its 1..N calendar shape with blanks for weekends
-          // and public holidays.
           const expandedDays = new Array(daysInMonth).fill('');
           for (let wd = 0; wd < expectedWorkingDays; wd++) {
             expandedDays[workingDaysList[wd] - 1] = normalisedWorking[wd];
           }
 
-          // Calculate — same loop as before, reading expandedDays.
-          // Rule: P = Present; A or blank = Absent.
           let present = 0, absent = 0, working = 0, provided = 0;
           for (let d = 0; d < daysInMonth; d++) {
             if (!isWorkingByIndex[d]) continue;
@@ -2883,7 +2761,7 @@ app.post('/api/admin/attendance/import',
             const v = expandedDays[d];
             if (v !== '') provided++;
             if (v === 'P') present++;
-            else absent++;                // A or blank ⇒ absent
+            else absent++;
           }
 
           const percentage = working > 0
@@ -2978,11 +2856,7 @@ app.post('/api/admin/attendance/import',
     );
   }
 );
-// ------------------------------------------------------------------
-// DELETE /api/admin/attendance/record/:isseFileNo?year=&month=
-// Deletes ONE staff member's attendance record for a specific month.
-// Respects department scope for HOU-level users.
-// ------------------------------------------------------------------
+
 app.delete('/api/admin/attendance/record',
   requireAuth, requirePermission('attendance.manage'),
   (req, res) => {
@@ -3021,15 +2895,6 @@ app.delete('/api/admin/attendance/record',
   }
 );
 
-// ------------------------------------------------------------------
-// PATCH /api/admin/attendance/record
-// Update a single staff member's attendance for a month.
-// Body: { fileNo, year, month, workingDayValues: ['P','A',...] }
-// `workingDayValues` must have exactly one entry per working day in
-// that month. The backend re-expands it into the stored calendar-day
-// array and recalculates present/absent/percentage.
-// Respects department scope for HOU-level users.
-// ------------------------------------------------------------------
 app.patch('/api/admin/attendance/record',
   requireAuth, requirePermission('attendance.manage'),
   (req, res) => {
@@ -3052,7 +2917,6 @@ app.patch('/api/admin/attendance/record',
 
     const daysInMonth = new Date(year, month, 0).getDate();
 
-    // Build the working-day calendar list for the month.
     const workingDaysList = [];
     for (let d = 1; d <= daysInMonth; d++) {
       if (isWorkingDay(new Date(year, month - 1, d))) workingDaysList.push(d);
@@ -3064,7 +2928,6 @@ app.patch('/api/admin/attendance/record',
       });
     }
 
-    // Normalise values — only P and A are accepted; anything else → A.
     const normalised = workingDayValues.map(v => {
       const s = (v === null || v === undefined)
         ? ''
@@ -3072,13 +2935,11 @@ app.patch('/api/admin/attendance/record',
       return s === 'P' ? 'P' : 'A';
     });
 
-    // Expand into the full calendar-day array (blanks on weekends/holidays).
     const expandedDays = new Array(daysInMonth).fill('');
     for (let wd = 0; wd < workingDaysList.length; wd++) {
       expandedDays[workingDaysList[wd] - 1] = normalised[wd];
     }
 
-    // Recalculate — only working days count.
     let present = 0, absent = 0, working = 0, provided = 0;
     for (let d = 0; d < daysInMonth; d++) {
       if (!isWorkingDay(new Date(year, month - 1, d + 1))) continue;
@@ -3092,7 +2953,6 @@ app.patch('/api/admin/attendance/record',
       ? Number(((present / working) * 100).toFixed(2))
       : 0;
 
-    // Locate the record — respecting department scope for HOU users.
     const deptFilter = departmentFilterFor(req);
     let lookupSql = `SELECT id FROM attendance_records
                       WHERE LOWER(isse_file_no) = LOWER(?) AND year = ? AND month = ?`;
@@ -3133,11 +2993,6 @@ app.patch('/api/admin/attendance/record',
   }
 );
 
-// ------------------------------------------------------------------
-// DELETE /api/admin/attendance/month?year=&month=
-// Deletes EVERY record for a specific month.
-// Respects department scope for HOU-level users.
-// ------------------------------------------------------------------
 app.delete('/api/admin/attendance/month',
   requireAuth, requirePermission('attendance.manage'),
   (req, res) => {
@@ -3172,11 +3027,6 @@ app.delete('/api/admin/attendance/month',
   }
 );
 
-// ------------------------------------------------------------------
-// GET /api/attendance/my-months/:isseFileNo
-// Lists months a staff member has attendance for. Staff self-service.
-// No auth token — identified by file number, same as leave routes.
-// ------------------------------------------------------------------
 app.get('/api/attendance/my-months/:isseFileNo', (req, res) => {
   const fileNo = req.params.isseFileNo;
   if (!fileNo) return res.status(400).json({ error: 'ISSE File Number required.' });
@@ -3193,11 +3043,6 @@ app.get('/api/attendance/my-months/:isseFileNo', (req, res) => {
   );
 });
 
-// ------------------------------------------------------------------
-// GET /api/attendance/my-record/:isseFileNo?year=&month=
-// Returns that staff member's single attendance record for a month.
-// Staff self-service.
-// ------------------------------------------------------------------
 app.get('/api/attendance/my-record/:isseFileNo', (req, res) => {
   const fileNo = req.params.isseFileNo;
   const year  = parseInt(req.query.year, 10);
@@ -3222,23 +3067,7 @@ app.get('/api/attendance/my-record/:isseFileNo', (req, res) => {
 // ============================================================
 // STAFF ENQUIRIES MODULE
 // ============================================================
-// Staff submit enquiries from the leave portal; admins with the
-// 'staff_enquiries.manage' permission can view and reply. Replies
-// are emailed to the staff member using the same EmailJS template
-// as the website's admin panel (fired client-side).
-//
-// Lifecycle:
-//   unread      → admin hasn't opened it yet
-//   not replied → admin opened it, no reply sent yet
-//   replied     → reply saved; staff_viewed_reply_at reset to NULL
-//
-// Staff-side badge count = enquiries where status='replied' AND
-// staff_viewed_reply_at IS NULL.
-// ============================================================
 
-// -------- Staff-facing routes (fileNo identified, no admin auth) --------
-
-// POST /api/staff-enquiries — submit a new enquiry
 app.post('/api/staff-enquiries', (req, res) => {
   const { isseFileNo, subject, message } = req.body || {};
 
@@ -3299,7 +3128,6 @@ app.post('/api/staff-enquiries', (req, res) => {
   );
 });
 
-// GET /api/staff-enquiries/my/:fileNo — list the staff's own enquiries
 app.get('/api/staff-enquiries/my/:fileNo', (req, res) => {
   db.all(
     `SELECT id, subject, message, status, staff_viewed_reply_at, created_at, updated_at
@@ -3314,7 +3142,6 @@ app.get('/api/staff-enquiries/my/:fileNo', (req, res) => {
   );
 });
 
-// GET /api/staff-enquiries/my/:fileNo/:id — full enquiry + reply; stamps viewed
 app.get('/api/staff-enquiries/my/:fileNo/:id', (req, res) => {
   const { fileNo, id } = req.params;
 
@@ -3335,13 +3162,11 @@ app.get('/api/staff-enquiries/my/:fileNo/:id', (req, res) => {
         (replyErr, reply) => {
           if (replyErr) return res.status(500).json({ error: replyErr.message });
 
-          // Stamp staff_viewed_reply_at the first time the staff opens
-          // an enquiry that already has a reply.
           if (reply && !enquiry.staff_viewed_reply_at) {
             db.run(
               `UPDATE staff_enquiries SET staff_viewed_reply_at = NOW() WHERE id = ?`,
               [id],
-              () => { /* best-effort; non-blocking */ }
+              () => { }
             );
           }
 
@@ -3352,13 +3177,12 @@ app.get('/api/staff-enquiries/my/:fileNo/:id', (req, res) => {
   );
 });
 
-// -------- Admin-facing routes --------
+// -------- Admin-facing --------
 
-// GET /api/admin/staff-enquiries/unread-count — sidebar badge
 app.get(
   '/api/admin/staff-enquiries/unread-count',
   requireAuth,
-  requirePermission('staff_enquiries.manage'),
+  requireAnyPermission(['staff_enquiries.view', 'staff_enquiries.manage']),
   (req, res) => {
     db.get(
       `SELECT COUNT(*) AS count FROM staff_enquiries WHERE status = 'unread'`,
@@ -3371,11 +3195,10 @@ app.get(
   }
 );
 
-// GET /api/admin/staff-enquiries — list all (dept-scoped for HOU)
 app.get(
   '/api/admin/staff-enquiries',
   requireAuth,
-  requirePermission('staff_enquiries.manage'),
+  requireAnyPermission(['staff_enquiries.view', 'staff_enquiries.manage']),
   (req, res) => {
     const deptFilter = departmentFilterFor(req);
 
@@ -3390,7 +3213,6 @@ app.get(
       params.push(deptFilter);
     }
 
-    // Unread first, then newest first
     sql += ` ORDER BY CASE WHEN status = 'unread' THEN 0 ELSE 1 END, created_at DESC`;
 
     db.all(sql, params, (err, rows) => {
@@ -3400,11 +3222,12 @@ app.get(
   }
 );
 
-// GET /api/admin/staff-enquiries/:id — detail; flips unread → not replied
+// Detail — view users can open it, but only managers flip
+// 'unread' → 'not replied'. A viewer shouldn't change state.
 app.get(
   '/api/admin/staff-enquiries/:id',
   requireAuth,
-  requirePermission('staff_enquiries.manage'),
+  requireAnyPermission(['staff_enquiries.view', 'staff_enquiries.manage']),
   (req, res) => {
     const { id } = req.params;
 
@@ -3412,14 +3235,14 @@ app.get(
       if (err) return res.status(500).json({ error: err.message });
       if (!enquiry) return res.status(404).json({ error: 'Enquiry not found.' });
 
-      // Department scoping
       const deptFilter = departmentFilterFor(req);
-      if (
-        deptFilter &&
-        (enquiry.department || '').toLowerCase() !== deptFilter.toLowerCase()
-      ) {
+      if (deptFilter && (enquiry.department || '').toLowerCase() !== deptFilter.toLowerCase()) {
         return res.status(403).json({ error: 'You do not have permission to view this enquiry.' });
       }
+
+      const canManage =
+        req.authContext.authority === 'full' ||
+        req.authContext.permissions.has('staff_enquiries.manage');
 
       db.get(
         `SELECT admin_username, admin_role, body, created_at
@@ -3430,9 +3253,7 @@ app.get(
         (replyErr, reply) => {
           if (replyErr) return res.status(500).json({ error: replyErr.message });
 
-          // Flip unread → not replied, and clear the corresponding
-          // admin-type notification for this enquiry.
-          if (enquiry.status === 'unread') {
+          if (enquiry.status === 'unread' && canManage) {
             db.run(
               `UPDATE staff_enquiries
                   SET status = 'not replied', updated_at = NOW()
@@ -3446,7 +3267,7 @@ app.get(
                       AND recipient_type = 'admin'
                       AND is_read = 0`,
                   [id],
-                  () => { /* best-effort */ }
+                  () => { }
                 );
               }
             );
@@ -3459,7 +3280,6 @@ app.get(
   }
 );
 
-// POST /api/admin/staff-enquiries/:id/reply — save reply + flip status
 app.post(
   '/api/admin/staff-enquiries/:id/reply',
   requireAuth,
@@ -3480,10 +3300,7 @@ app.post(
       if (!enquiry) return res.status(404).json({ error: 'Enquiry not found.' });
 
       const deptFilter = departmentFilterFor(req);
-      if (
-        deptFilter &&
-        (enquiry.department || '').toLowerCase() !== deptFilter.toLowerCase()
-      ) {
+      if (deptFilter && (enquiry.department || '').toLowerCase() !== deptFilter.toLowerCase()) {
         return res.status(403).json({ error: 'You do not have permission to reply to this enquiry.' });
       }
 
@@ -3494,8 +3311,6 @@ app.post(
         function (replyErr) {
           if (replyErr) return res.status(500).json({ error: replyErr.message });
 
-          // Flip to replied; reset staff_viewed_reply_at so the staff
-          // badge picks up the new unseen reply.
           db.run(
             `UPDATE staff_enquiries
                 SET status = 'replied',
@@ -3514,9 +3329,6 @@ app.post(
                 `Replied to enquiry from ${enquiry.staff_name}`
               );
 
-              // Return the staff name + email so the client-side EmailJS
-              // call can compose the reply email. The reply itself is
-              // already saved — if the email fails, nothing is lost.
               res.json({
                 message: 'Reply sent successfully.',
                 replyId: this.lastID,
@@ -3536,8 +3348,15 @@ app.post(
 // SERVER START
 // ==========================================
 
-// PORT is read from the environment when the host provides one
-// (Render, Railway, Fly.io, Heroku-style platforms all inject it).
-// On a laptop without that env var, it falls back to 5000.
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+const server = app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+server.on('error', (err) => {
+  if (err && err.code === 'EADDRINUSE') {
+    console.error(`❌ Port ${PORT} is already in use. Stop the other process or set a different PORT.`);
+  } else {
+    console.error('❌ Server error:', err);
+  }
+  process.exit(1);
+});

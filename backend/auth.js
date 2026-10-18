@@ -90,11 +90,14 @@ async function issueSession(userId) {
   const token = generateToken();
   const expiresAt = new Date(Date.now() + SESSION_DURATION_DAYS * 24 * 60 * 60 * 1000);
 
+  // Only write session state here. `is_active` is the account-enabled
+  // flag and must never be flipped by a login — a Super Admin who has
+  // deactivated an account expects it to stay deactivated even if that
+  // account somehow obtains credentials.
   await query(
     `UPDATE users
      SET session_token = $1,
          session_expires_at = $2,
-         is_active = 1,
          last_seen = NOW()
      WHERE id = $3`,
     [token, expiresAt, userId]
@@ -117,7 +120,7 @@ async function getUserByToken(token) {
   if (!rows.length) return null;
   const user = rows[0];
 
-  if (user.is_active === 0) return null;
+  if (user.is_active === 0 || user.is_active === false) return null;
 
   if (user.session_expires_at && new Date(user.session_expires_at) < new Date()) {
     await query(`UPDATE users SET session_token = NULL, session_expires_at = NULL WHERE id = $1`, [user.id]);
@@ -128,8 +131,12 @@ async function getUserByToken(token) {
 }
 
 async function revokeSession(userId) {
+  // Logging out clears session state only. `is_active` is the
+  // account-enabled flag and must stay untouched — otherwise
+  // every logout would permanently disable the account and, with
+  // the login guard, lock the user out of their own account.
   await query(
-    `UPDATE users SET session_token = NULL, session_expires_at = NULL, is_active = 0, last_seen = NOW() WHERE id = $1`,
+    `UPDATE users SET session_token = NULL, session_expires_at = NULL, last_seen = NOW() WHERE id = $1`,
     [userId]
   );
 }
