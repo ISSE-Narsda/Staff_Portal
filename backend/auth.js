@@ -3,10 +3,71 @@
 // ============================================================
 
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const { query } = require('./database');
 
 const WORKFLOW_LEVELS = { none: 0, unit: 1, final: 2, full: 3 };
 const SESSION_DURATION_DAYS = 7;
+const STAFF_SESSION_DURATION_HOURS = 12;
+const BCRYPT_COST = 10;
+
+// ------------------------------------------------------------
+// PASSWORD HASHING (bcrypt)
+// ------------------------------------------------------------
+// bcrypt hashes always start with `$2a$`, `$2b$`, or `$2y$`.
+// Anything else is treated as a LEGACY plain-text password and
+// verified with a timing-safe comparison so nobody is locked out
+// before backend/migrate-passwords.js is run on the server.
+
+async function hashPassword(plain) {
+  if (plain === null || plain === undefined || typeof plain !== 'string' || plain.length === 0) {
+    throw new Error('hashPassword: plain password must be a non-empty string.');
+  }
+  return bcrypt.hash(plain, BCRYPT_COST);
+}
+
+async function verifyPassword(plain, stored) {
+  // Never leak timing about which side is missing.
+  if (plain === null || plain === undefined || typeof plain !== 'string') {
+    return { ok: false, needsRehash: false };
+  }
+  if (stored === null || stored === undefined || typeof stored !== 'string' || stored.length === 0) {
+    return { ok: false, needsRehash: false };
+  }
+
+  const looksHashed =
+    stored.startsWith('$2a$') ||
+    stored.startsWith('$2b$') ||
+    stored.startsWith('$2y$');
+
+  if (looksHashed) {
+    try {
+      const ok = await bcrypt.compare(plain, stored);
+      return { ok: !!ok, needsRehash: false };
+    } catch (_) {
+      return { ok: false, needsRehash: false };
+    }
+  }
+
+  // Legacy plain-text fallback.
+  const a = Buffer.from(String(plain), 'utf8');
+  const b = Buffer.from(String(stored), 'utf8');
+  if (a.length !== b.length) {
+    return { ok: false, needsRehash: false };
+  }
+  try {
+    const ok = crypto.timingSafeEqual(a, b);
+    // If the plain-text password matched, the next login should
+    // transparently replace it with a bcrypt hash.
+    return { ok, needsRehash: ok };
+  } catch (_) {
+    return { ok: false, needsRehash: false };
+  }
+}
+
+// ------------------------------------------------------------
+// ADMIN AUTH CONTEXT (unchanged from original)
+// ------------------------------------------------------------
 
 async function getUserAuthContext(userId) {
   if (!userId) return null;
@@ -82,9 +143,17 @@ async function getUserScope(userId) {
   return { scope: ctx.scope, department: ctx.user.department || null };
 }
 
+// ------------------------------------------------------------
+// TOKEN GENERATION
+// ------------------------------------------------------------
+
 function generateToken() {
   return crypto.randomBytes(32).toString('hex');
 }
+
+// ------------------------------------------------------------
+// ADMIN SESSIONS (unchanged)
+// ------------------------------------------------------------
 
 async function issueSession(userId) {
   const token = generateToken();
@@ -141,7 +210,74 @@ async function revokeSession(userId) {
   );
 }
 
+// ------------------------------------------------------------
+// STAFF SESSIONS (new — part 1 of 8)
+// ------------------------------------------------------------
+// Staff sessions live in staff_profiles.session_token / session_expires_at
+// (the columns are created by the SQL in §4 of the plan). Duration is
+// deliberately shorter than an admin session (12h vs 7 days) because
+// staff use the portal far less often.
+//
+// The returned staff object NEVER contains `password`, `session_token`
+// or `session_expires_at` — those are stripped before every response.
+
+async function issueStaffSession(staffId) {
+  if (!staffId) throw new Error('issueStaffSession: staffId is required.');
+
+  const token = generateToken();
+  const expiresAt = new Date(Date.now() + STAFF_SESSION_DURATION_HOURS * 60 * 60 * 1000);
+
+  await query(
+    `UPDATE staff_profiles
+     SET session_token = $1,
+         session_expires_at = $2
+     WHERE id = $3`,
+    [token, expiresAt, staffId]
+  );
+
+  return { token, expiresAt };
+}
+
+async function getStaffByToken(token) {
+  if (!token || typeof token !== 'string' || token.length < 32) return null;
+
+  const rows = await query(
+    `SELECT id, isse_file_no, full_name, department, designation,
+            grade_level, official_email, gender,
+            last_promotion_date, next_promotion_date,
+            session_expires_at
+     FROM staff_profiles
+     WHERE session_token = $1`,
+    [token]
+  );
+
+  if (!rows.length) return null;
+  const staff = rows[0];
+
+  if (staff.session_expires_at && new Date(staff.session_expires_at) < new Date()) {
+    await query(
+      `UPDATE staff_profiles SET session_token = NULL, session_expires_at = NULL WHERE id = $1`,
+      [staff.id]
+    );
+    return null;
+  }
+
+  // Strip the session metadata before returning — callers only
+  // need identity fields.
+  const { session_expires_at, ...safe } = staff;
+  return safe;
+}
+
+async function revokeStaffSession(staffId) {
+  if (!staffId) return;
+  await query(
+    `UPDATE staff_profiles SET session_token = NULL, session_expires_at = NULL WHERE id = $1`,
+    [staffId]
+  );
+}
+
 module.exports = {
+  // Admin (existing)
   getUserAuthContext,
   hasPermission,
   hasWorkflowAuthority,
@@ -150,6 +286,15 @@ module.exports = {
   issueSession,
   getUserByToken,
   revokeSession,
+  // Password (new — Part 1 of 8)
+  hashPassword,
+  verifyPassword,
+  // Staff sessions (new — Part 1 of 8)
+  issueStaffSession,
+  getStaffByToken,
+  revokeStaffSession,
+  // Constants
   WORKFLOW_LEVELS,
-  SESSION_DURATION_DAYS
+  SESSION_DURATION_DAYS,
+  STAFF_SESSION_DURATION_HOURS
 };
