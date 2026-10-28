@@ -134,6 +134,56 @@ function showAlert(message) {
   }
 }
 
+// Scrollable, copy-all-able error-list modal for bulk imports.
+// Renders every error (no truncation). Uses textContent so HTML in
+// the error strings cannot inject markup — no escaping needed.
+// Falls back to a plain alert if the modal element is missing.
+function showErrorListModal(title, errorsArray) {
+  const list = Array.isArray(errorsArray) ? errorsArray : [];
+  const modal   = document.getElementById('errorListModal');
+  const titleEl = document.getElementById('errorListModalTitle');
+  const bodyEl  = document.getElementById('errorListModalBody');
+  const countEl = document.getElementById('errorListModalCount');
+  const copyBtn = document.getElementById('errorListModalCopyBtn');
+
+  if (!modal || !bodyEl) {
+    alert((title || 'Errors') + ':\n\n' + list.join('\n'));
+    return;
+  }
+
+  if (titleEl) titleEl.textContent = title || 'Errors';
+  if (countEl) countEl.textContent = list.length + ' error(s)';
+  bodyEl.textContent = list.join('\n');
+
+  if (copyBtn) {
+    copyBtn.onclick = async function () {
+      const text = list.join('\n');
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text);
+          copyBtn.textContent = '✓ Copied';
+          setTimeout(function () { copyBtn.textContent = '📋 Copy all errors'; }, 1500);
+          return;
+        }
+      } catch (_) { /* fall through to textarea fallback */ }
+
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch (_) { /* ignore */ }
+      document.body.removeChild(ta);
+      copyBtn.textContent = '✓ Copied';
+      setTimeout(function () { copyBtn.textContent = '📋 Copy all errors'; }, 1500);
+    };
+  }
+
+  if (typeof openModal === 'function') openModal('errorListModal');
+  else modal.style.display = 'flex';
+}
+
 function openModal(id) {
   const el = document.getElementById(id);
   if (el) el.style.display = 'flex';
@@ -1136,16 +1186,18 @@ function applyStaffFilters() {
   const canEditStaff = hasFrontendPermission('staff.edit');
 
   tbody.innerHTML = rows.map(s => {
-    let passwordCell;
+        let passwordCell;
     if (!isSuperAdmin) {
       passwordCell = `<span style="color: var(--text-muted); font-size: 0.75rem;">🔒 Restricted</span>`;
-    } else if (!s.has_password) {
-      passwordCell = `<span style="color: var(--text-muted); font-size: 0.75rem;">— not set —</span>`;
     } else {
+      // Password hashes are one-way — the original password can never
+      // be shown again. The button resets it to a new random password
+      // and displays that new value exactly once.
+      const masked = s.has_password ? '••••••••' : '— not set —';
       passwordCell = `
         <span id="pwd-cell-${s.id}" style="display: inline-flex; align-items: center; gap: 4px;">
-          <span style="font-family: monospace; letter-spacing: 2px; color: var(--text-muted);">••••••••</span>
-          <button class="action-btn btn-edit" style="padding: 2px 6px; font-size: 0.68rem;" onclick="revealTablePassword(${s.id})" title="Reveal password">👁</button>
+          <span style="font-family: monospace; letter-spacing: 2px; color: var(--text-muted);">${masked}</span>
+          <button class="action-btn btn-edit" style="padding: 2px 6px; font-size: 0.68rem;" onclick="resetTablePassword(${s.id})" title="Reset password">🔄</button>
         </span>
       `;
     }
@@ -1272,13 +1324,19 @@ function openStaffProfileModal(staffId) {
       document.getElementById('staffProfileLastPromotion').value = formatDateForInput(s.last_promotion_date);
       document.getElementById('staffProfileNextPromotion').value = formatDateForInput(s.next_promotion_date);
 
-      const pwdSection = document.getElementById('staffProfilePasswordSection');
+            const pwdSection = document.getElementById('staffProfilePasswordSection');
       const pwdValueInput = document.getElementById('staffProfilePasswordValue');
       if (pwdSection) {
         pwdSection.style.display = (currentAdminUser && currentAdminUser.authority === 'full') ? 'block' : 'none';
       }
       if (pwdValueInput) {
-        pwdValueInput.value = s.has_password ? '••••••••' : '';
+        // Hashed password cannot be shown. Start the input empty so the
+        // Super Admin either types a new password (Save) or clicks
+        // Regenerate. The placeholder changes based on current state.
+        pwdValueInput.value = '';
+        pwdValueInput.placeholder = s.has_password
+          ? 'Leave blank to keep current, or type a new password'
+          : '(no password set — click Regenerate)';
         pwdValueInput.dataset.hasPassword = s.has_password ? '1' : '0';
         pwdValueInput.dataset.staffId = s.id;
       }
@@ -1308,101 +1366,11 @@ function openStaffProfileModal(staffId) {
 
 // ================= SUPER ADMIN PASSWORD CONTROLS =================
 
-let pendingPasswordAction = null;
-
-function openAdminReauth(action) {
-  if (!currentAdminUser || currentAdminUser.authority !== 'full') {
-    showAlert('Only the Super Admin can perform this action.');
-    return;
-  }
-  pendingPasswordAction = action;
-
-  const promptEl = document.getElementById('adminReauthPrompt');
-  const inputEl = document.getElementById('adminReauthPasswordInput');
-  const errEl = document.getElementById('adminReauthError');
-
-  if (promptEl) {
-    promptEl.textContent = 'Enter your Super Admin login password to reveal this staff member\'s password.';
-  }
-  if (inputEl) inputEl.value = '';
-  if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
-
-  openModal('adminReauthModal');
-  setTimeout(() => inputEl && inputEl.focus(), 80);
-}
-
-function closeAdminReauthModal() {
-  closeModal('adminReauthModal');
-  pendingPasswordAction = null;
-  const inputEl = document.getElementById('adminReauthPasswordInput');
-  if (inputEl) inputEl.value = '';
-  const errEl = document.getElementById('adminReauthError');
-  if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
-}
-
-async function submitAdminReauth() {
-  const action = pendingPasswordAction;
-  if (!action) return;
-
-  const inputEl = document.getElementById('adminReauthPasswordInput');
-  const errEl = document.getElementById('adminReauthError');
-  const btn = document.getElementById('adminReauthConfirmBtn');
-  const adminPassword = inputEl ? inputEl.value : '';
-
-  if (!adminPassword) {
-    if (errEl) { errEl.style.display = 'block'; errEl.textContent = 'Please enter your password.'; }
-    return;
-  }
-
-  const orig = btn ? btn.textContent : '';
-  if (btn) { btn.disabled = true; btn.textContent = 'Verifying...'; }
-
-  try {
-    const res = await fetch(`${API_BASE}/admin/staff/${action.staffId}/reveal-password`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ adminPassword })
-    });
-
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Action failed.');
-
-    const cell = document.getElementById(`pwd-cell-${action.staffId}`);
-    if (cell) {
-      cell.innerHTML = `
-        <span style="font-family: monospace; font-size: 0.8rem;">${data.password}</span>
-        <button class="action-btn btn-reject" style="padding: 2px 6px; font-size: 0.68rem; margin-left: 6px;" onclick="hideTablePassword(${action.staffId})" title="Hide">✖</button>
-      `;
-    }
-
-    closeAdminReauthModal();
-  } catch (err) {
-    if (errEl) { errEl.style.display = 'block'; errEl.textContent = err.message; }
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = orig; }
-  }
-}
-
-async function revealStaffProfilePassword() {
-  const inputEl = document.getElementById('staffProfilePasswordValue');
-  const staffId = inputEl ? inputEl.dataset.staffId : null;
-  if (!staffId) return;
-
-  try {
-    const res = await fetch(`${API_BASE}/admin/staff/${staffId}/reveal-password`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({})
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Could not reveal password.');
-
-    inputEl.value = data.password;
-    inputEl.dataset.hasPassword = '1';
-  } catch (err) {
-    showAlert(err.message);
-  }
-}
+// Password hashes are one-way — the original password can never be
+// retrieved. The helpers below reset a staff member's password to a
+// new value and show it to the Super Admin ONCE so it can be handed
+// to the staff member. There is no "Reveal" anymore, and no re-auth
+// prompt (the reset is a normal action on the PATCH route).
 
 async function saveStaffProfilePassword() {
   const inputEl = document.getElementById('staffProfilePasswordValue');
@@ -1410,12 +1378,12 @@ async function saveStaffProfilePassword() {
   if (!staffId) return;
 
   const value = inputEl.value.trim();
-  if (!value || value.startsWith('••')) {
-    showAlert('Please enter a new password or use Regenerate.');
+  if (!value) {
+    showAlert('Please enter a new password, or use Regenerate for a random one.');
     return;
   }
-  if (value.length < 4) {
-    showAlert('Password must be at least 4 characters.');
+  if (value.length < 8) {
+    showAlert('Password must be at least 8 characters.');
     return;
   }
 
@@ -1430,7 +1398,11 @@ async function saveStaffProfilePassword() {
 
     inputEl.value = data.password;
     inputEl.dataset.hasPassword = '1';
-    showAlert('Password updated successfully.');
+    showAlert(
+      'Password updated.\n\nNew password: ' + data.password +
+      '\n\nCopy it NOW and give it to the staff member. It cannot be shown again — ' +
+      'only reset (which replaces it with a different one).'
+    );
     loadStaffTable();
   } catch (err) {
     showAlert(err.message);
@@ -1453,23 +1425,67 @@ async function regenerateStaffProfilePassword() {
 
     inputEl.value = data.password;
     inputEl.dataset.hasPassword = '1';
-    showAlert('New password generated.');
+    showAlert(
+      'New password generated.\n\nNew password: ' + data.password +
+      '\n\nCopy it NOW and give it to the staff member. It cannot be shown again.'
+    );
     loadStaffTable();
   } catch (err) {
     showAlert(err.message);
   }
 }
 
-function revealTablePassword(staffId) {
-  openAdminReauth({ type: 'reveal', staffId: Number(staffId), source: 'table' });
+// Table-row "Reset password" button. Generates a new random password
+// via the existing PATCH route (empty body → regenerate mode), shows
+// it once in the cell, and prompts the Super Admin to copy it. Hashes
+// are one-way so there is no equivalent to the old "Reveal".
+async function resetTablePassword(staffId) {
+  if (!confirm(
+    'Reset this staff member\'s password?\n\n' +
+    'A new random password will be generated. It can only be shown ONCE — ' +
+    'copy it before dismissing the alert.'
+  )) {
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/admin/staff/${staffId}/password`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Could not reset password.');
+
+    // Update the cached row so hideTablePassword reads the right state.
+    const staff = cachedAllStaff.find(s => String(s.id) === String(staffId));
+    if (staff) staff.has_password = true;
+
+    const cell = document.getElementById(`pwd-cell-${staffId}`);
+    if (cell) {
+      cell.innerHTML = `
+        <span style="font-family: monospace; font-size: 0.78rem; color: var(--accent-gold); font-weight: 700;">${data.password}</span>
+        <button class="action-btn btn-approve" style="padding: 2px 6px; font-size: 0.68rem; margin-left: 6px;" onclick="hideTablePassword(${staffId})" title="I have copied it — hide">✖</button>
+      `;
+    }
+
+    alert(
+      'Password reset successfully.\n\nNew password: ' + data.password +
+      '\n\nCopy it NOW and give it to the staff member. It cannot be shown again.'
+    );
+  } catch (err) {
+    showAlert(err.message);
+  }
 }
 
 function hideTablePassword(staffId) {
   const cell = document.getElementById(`pwd-cell-${staffId}`);
   if (!cell) return;
+  const staff = cachedAllStaff.find(s => String(s.id) === String(staffId));
+  const masked = (staff && staff.has_password) ? '••••••••' : '— not set —';
   cell.innerHTML = `
-    <span style="font-family: monospace; letter-spacing: 2px; color: var(--text-muted);">••••••••</span>
-    <button class="action-btn btn-edit" style="padding: 2px 6px; font-size: 0.68rem; margin-left: 6px;" onclick="revealTablePassword(${staffId})" title="Reveal">👁</button>
+    <span style="font-family: monospace; letter-spacing: 2px; color: var(--text-muted);">${masked}</span>
+    <button class="action-btn btn-edit" style="padding: 2px 6px; font-size: 0.68rem; margin-left: 6px;" onclick="resetTablePassword(${staffId})" title="Reset password">🔄</button>
   `;
 }
 
@@ -3315,8 +3331,9 @@ async function handleBulkStaffImport() {
     });
   });
 
-  if (errors.length > 0) {
-    showAlert(`Import Failed. Please fix the following errors:\n\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? '\n...and more.' : ''}`);
+    if (errors.length > 0) {
+    showAlert('Import Failed. ' + errors.length + ' error(s) found — see the list that opens next.');
+    showErrorListModal('Staff bulk import — errors', errors);
     return;
   }
 
@@ -3628,13 +3645,14 @@ function applyAttendanceFilters() {
     );
   }
 
-  if (statusFilter) {
+    if (statusFilter) {
     const t = cachedAttendanceThresholds;
     rows = rows.filter(r => {
       const pct = parseFloat(r.percentage) || 0;
       if (statusFilter === 'perfect')   return pct >= 100;
       if (statusFilter === 'excellent') return pct >= t.excellent && pct < 100;
       if (statusFilter === 'good')      return pct >= t.good && pct < t.excellent;
+      if (statusFilter === 'low')       return pct >= t.warning && pct < t.good;
       if (statusFilter === 'warning')   return pct < t.warning;
       return true;
     });
@@ -3847,6 +3865,10 @@ function openAttendanceImportModal() {
   document.getElementById('attendanceFileInput').value   = '';
   document.getElementById('attendanceImportPreview').style.display = 'none';
   pendingAttendanceImport = null;
+  // A previous session may have left the Confirm button disabled on
+  // invalid-cell errors. Reset it so the modal is reusable.
+  const confirmBtn = document.getElementById('attendanceImportConfirmBtn');
+  if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.title = ''; }
   openModal('attendanceImportModal');
 }
 
@@ -3928,8 +3950,11 @@ async function previewAttendanceImport() {
   const staffMap = new Map();
   (staffList || []).forEach(s => staffMap.set(String(s.isse_file_no).toLowerCase(), s));
 
-  const validRows = [];
+    const validRows = [];
   const rowErrors = [];
+  // Split out invalid-cell errors so we can block the Confirm button
+  // on them. "Staff not found" rows can still be skipped.
+  const invalidCellErrors = [];
 
   rows.forEach((r, i) => {
     const staff = staffMap.get(String(r.isseFileNo).toLowerCase());
@@ -3955,7 +3980,9 @@ async function previewAttendanceImport() {
       if (v === '' || v === 'A' || v === 'P') {
         normalisedWorking.push(v);
       } else {
-        rowErrors.push(`Row ${i + 1} (${r.isseFileNo}): invalid value "${raw}" on working day ${wd + 1}.`);
+        const msg = `Row ${i + 1} (${r.isseFileNo}): invalid value "${raw}" on working day ${wd + 1}.`;
+        rowErrors.push(msg);
+        invalidCellErrors.push(msg);
         normalisedWorking.push('');
       }
     }
@@ -4040,14 +4067,19 @@ async function previewAttendanceImport() {
     `;
   }
 
-  if (rowErrors.length > 0) {
+    if (rowErrors.length > 0) {
+    const invalidNotice = invalidCellErrors.length > 0
+      ? `<div style="margin-top: 6px; font-size: 0.75rem; color: #DC2626; font-weight: 600;">
+           ⛔ ${invalidCellErrors.length} invalid-cell error(s) — fix these before importing.
+         </div>`
+      : '';
     html += `
       <div style="margin-top: 10px; padding: 8px 12px; background: rgba(220,38,38,0.1);
                   border-left: 3px solid #DC2626; border-radius: 3px;">
         <strong style="color: #DC2626;">Errors (${rowErrors.length}):</strong>
-        <div style="font-size: 0.75rem; margin-top: 4px; max-height: 100px; overflow-y: auto;">
-          ${rowErrors.slice(0, 15).map(e => escapeHtml(e)).join('<br>')}
-          ${rowErrors.length > 15 ? '<br>…and more.' : ''}
+        ${invalidNotice}
+        <div style="font-size: 0.75rem; margin-top: 4px; max-height: 300px; overflow-y: auto;">
+          ${rowErrors.map(e => escapeHtml(e)).join('<br>')}
         </div>
       </div>
     `;
@@ -4055,19 +4087,47 @@ async function previewAttendanceImport() {
 
   preview.innerHTML = html;
 
-  pendingAttendanceImport = {
+    pendingAttendanceImport = {
     year, month,
+    hasInvalidCellErrors: invalidCellErrors.length > 0,
+    invalidCellErrors: invalidCellErrors.slice(),
     rows: validRows.map(r => ({
       fullName:   r.fullName,
       isseFileNo: r.isseFileNo,
       days:       r.days
     }))
   };
+
+  // Block the Confirm button while invalid-cell errors are present.
+  // The user must fix the data, click Preview again, and get a clean
+  // result before we let the import touch the DB.
+  const confirmBtn = document.getElementById('attendanceImportConfirmBtn');
+  if (confirmBtn) {
+    if (invalidCellErrors.length > 0) {
+      confirmBtn.disabled = true;
+      confirmBtn.title = 'Fix the ' + invalidCellErrors.length +
+        ' error(s) above, then click Preview again.';
+    } else {
+      confirmBtn.disabled = false;
+      confirmBtn.title = '';
+    }
+  }
 }
 
 async function confirmAttendanceImport() {
   if (!pendingAttendanceImport || !pendingAttendanceImport.rows.length) {
     showAlert('Please click Preview first to validate the data.');
+    return;
+  }
+
+  // Hard block: never touch the DB while the last Preview reported
+  // invalid-cell errors. The Confirm button is disabled by Preview in
+  // that state; this branch catches programmatic or stale calls.
+  if (pendingAttendanceImport.hasInvalidCellErrors) {
+    showAlert(
+      'Fix the ' + (pendingAttendanceImport.invalidCellErrors || []).length +
+      ' error(s) above, then click Preview again.'
+    );
     return;
   }
 
@@ -4093,18 +4153,19 @@ async function confirmAttendanceImport() {
 
     closeModal('attendanceImportModal');
 
-    let msg = data.message || `Imported ${data.imported} records.`;
-    if (data.skipped > 0 && Array.isArray(data.errors) && data.errors.length > 0) {
-      const preview = data.errors.slice(0, 5).map(e => {
+    const errorList = Array.isArray(data.errors) ? data.errors : [];
+    if (errorList.length > 0) {
+      const formatted = errorList.map(e => {
         const label = e.row ? `Row ${e.row}` : (e.fileNo || 'unknown');
         return `${label}: ${e.error}`;
-      }).join('\n');
-      msg += `\n\nSkipped rows:\n${preview}`;
-      if (data.errors.length > 5) {
-        msg += `\n…and ${data.errors.length - 5} more.`;
-      }
+      });
+      const summary = (data.message || `Imported ${data.imported} records.`) +
+        ' ' + errorList.length + ' row(s) skipped — see the list that opens next.';
+      showAlert(summary);
+      showErrorListModal('Attendance import — skipped rows', formatted);
+    } else {
+      showAlert(data.message || `Imported ${data.imported} records.`);
     }
-    showAlert(msg);
 
     await initAttendancePage();
   } catch (err) {

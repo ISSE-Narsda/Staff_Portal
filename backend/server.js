@@ -4,6 +4,7 @@ const path = require('path');
 const db = require('./database');
 const auth = require('./auth');
 const multer = require('multer');
+const bcrypt = require('bcryptjs');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -13,14 +14,60 @@ const {
   issueSession,
   getUserByToken,
   revokeSession,
-  getUserAuthContext
+  getUserAuthContext,
+  hashPassword,
+  verifyPassword,
+  issueStaffSession,
+  getStaffByToken,
+  revokeStaffSession
 } = auth;
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.use(express.static(path.join(__dirname, '..')));
+// ============================================================
+// STATIC-FILE HARDENING (Bug B5)
+// ============================================================
+// Block accidental exposure of backend source, database files,
+// .env files, dependency folders and version control metadata.
+// Runs BEFORE express.static so nothing sensitive can be served.
+const BLOCKED_PATH_RE = /(^|\/)(backend|node_modules|\.git)(\/|$)/i;
+const BLOCKED_EXT_RE = /\.(db|sqlite|sqlite3|sqlite-backup|env|log|sql|md)$/i;
+const BLOCKED_EXACT = new Set([
+  '/package.json',
+  '/package-lock.json'
+]);
+
+app.use((req, res, next) => {
+  let raw = req.path || '';
+  let decoded;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch (_) {
+    return res.status(404).send('Not found');
+  }
+  const lower = decoded.toLowerCase();
+
+  if (BLOCKED_EXACT.has(lower)) return res.status(404).send('Not found');
+  if (BLOCKED_PATH_RE.test(decoded)) return res.status(404).send('Not found');
+  if (BLOCKED_EXT_RE.test(decoded)) return res.status(404).send('Not found');
+
+  // Reject any path segment that begins with a dot (dotfiles).
+  const segments = decoded.split('/');
+  for (let i = 0; i < segments.length; i++) {
+    if (segments[i] && segments[i].charAt(0) === '.') {
+      return res.status(404).send('Not found');
+    }
+  }
+
+  next();
+});
+
+app.use(express.static(path.join(__dirname, '..'), {
+  dotfiles: 'deny',
+  index: ['index.html']
+}));
 
 // ============================================================
 // WORKING-DAY CONFIGURATION
@@ -182,6 +229,45 @@ function markNotificationsReadForRequest(requestId, recipientType = null) {
 
 const WORKFLOW_LEVELS = { none: 0, unit: 1, final: 2, full: 3 };
 
+// ============================================================
+// LOGIN RATE LIMITER (Section 6 C3)
+// ============================================================
+// In-memory only. Resets on process restart. 10 failed attempts
+// per IP + identifier (file number or email) within 15 minutes
+// triggers a 429. A successful login clears the counter.
+const LOGIN_WINDOW_MS  = 15 * 60 * 1000;
+const LOGIN_MAX_ATTEMPTS = 10;
+const loginAttempts = new Map(); // key → { count, firstAt }
+
+function loginRateKey(req, identifier) {
+  const ip = req.ip || (req.connection && req.connection.remoteAddress) || 'unknown';
+  return `${ip}::${String(identifier || '').trim().toLowerCase()}`;
+}
+
+function loginRateLimited(key) {
+  const entry = loginAttempts.get(key);
+  if (!entry) return false;
+  if (Date.now() - entry.firstAt > LOGIN_WINDOW_MS) {
+    loginAttempts.delete(key);
+    return false;
+  }
+  return entry.count >= LOGIN_MAX_ATTEMPTS;
+}
+
+function loginRateRegisterFailure(key) {
+  const now = Date.now();
+  const entry = loginAttempts.get(key);
+  if (!entry || now - entry.firstAt > LOGIN_WINDOW_MS) {
+    loginAttempts.set(key, { count: 1, firstAt: now });
+    return;
+  }
+  entry.count += 1;
+}
+
+function loginRateClear(key) {
+  loginAttempts.delete(key);
+}
+
 async function requireAuth(req, res, next) {
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
@@ -195,13 +281,63 @@ async function requireAuth(req, res, next) {
     const ctx = await getUserAuthContext(user.id);
     if (!ctx) return res.status(401).json({ error: 'User has no role assigned.' });
 
-    req.authUser = user;
+        req.authUser = user;
     req.authContext = ctx;
     next();
   } catch (err) {
     console.error('Auth middleware error:', err.message);
     res.status(500).json({ error: 'Authentication check failed.' });
   }
+}
+
+// ============================================================
+// STAFF AUTH MIDDLEWARE (Bug B3 foundation)
+// ============================================================
+// Staff use the same Bearer-token scheme as admins, but the
+// token lives in staff_profiles.session_token. On any failure we
+// include `code: 'SESSION_INVALID'` so the staff portal can
+// distinguish "your session expired" from "wrong password".
+async function requireStaff(req, res, next) {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+
+  if (!token) {
+    return res.status(401).json({
+      error: 'Authentication required.',
+      code: 'SESSION_INVALID'
+    });
+  }
+
+  try {
+    const staff = await getStaffByToken(token);
+    if (!staff) {
+      return res.status(401).json({
+        error: 'Session expired or invalid.',
+        code: 'SESSION_INVALID'
+      });
+    }
+    req.staff = staff;
+    next();
+  } catch (err) {
+    console.error('Staff auth middleware error:', err.message);
+    res.status(500).json({ error: 'Authentication check failed.' });
+  }
+}
+
+// ============================================================
+// STAFF-OWNER CHECK (Bug B3 foundation)
+// ============================================================
+// Returns true when the file number from the URL / row equals
+// the authenticated staff member's file number (case-insensitive,
+// trimmed). Otherwise sends 403 and returns false. Never throws.
+function requireSameStaff(fileNo, req, res) {
+  const a = String(fileNo == null ? '' : fileNo).trim().toLowerCase();
+  const b = String(req.staff && req.staff.isse_file_no ? req.staff.isse_file_no : '')
+    .trim()
+    .toLowerCase();
+  if (a && b && a === b) return true;
+  res.status(403).json({ error: 'You can only access your own records.' });
+  return false;
 }
 
 function requireWorkflow(level) {
@@ -463,29 +599,38 @@ app.delete('/api/admin/roles/:id', requireAuth, requirePermission('settings.mana
 // Heartbeat only updates last_seen. It must never touch is_active —
 // that flag is the account-enabled bit and only the Super Admin
 // changes it (via user management).
-app.post('/api/admin/heartbeat', (req, res) => {
-  const { userId } = req.body;
-  if (!userId) return res.status(400).json({ error: 'User ID required' });
-
-  db.run(`UPDATE users SET last_seen = NOW() WHERE id = ?`, [userId], (err) => {
+app.post('/api/admin/heartbeat', requireAuth, (req, res) => {
+  // The bearer token identifies the caller. Body `userId` is ignored
+  // so no one can poke another user's last_seen.
+  db.run(`UPDATE users SET last_seen = NOW() WHERE id = ?`, [req.authUser.id], (err) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json({ success: true });
   });
 });
 
 app.post('/api/auth/staff-login', (req, res) => {
-  const { isseFileNo, password } = req.body;
+  const { isseFileNo, password } = req.body || {};
   if (!isseFileNo || !password) {
     return res.status(400).json({ error: 'ISSE File Number and Password are required.' });
   }
 
+  const identifier = String(isseFileNo).trim();
+  const rateKey = loginRateKey(req, identifier);
+
+  if (loginRateLimited(rateKey)) {
+    return res.status(429).json({ error: 'Too many attempts. Try again in 15 minutes.' });
+  }
+
   const query = `SELECT * FROM staff_profiles WHERE LOWER(isse_file_no) = LOWER(?)`;
-  db.get(query, [isseFileNo.trim()], (err, staff) => {
+  db.get(query, [identifier], async (err, staff) => {
     if (err) {
       console.error('Login DB Error:', err.message);
       return res.status(500).json({ error: 'Internal server error.' });
     }
-    if (!staff) return res.status(404).json({ error: 'ISSE File Number not found in database.' });
+    if (!staff) {
+      loginRateRegisterFailure(rateKey);
+      return res.status(404).json({ error: 'ISSE File Number not found in database.' });
+    }
 
     if (!staff.password || String(staff.password).trim() === '') {
       return res.status(403).json({
@@ -493,44 +638,129 @@ app.post('/api/auth/staff-login', (req, res) => {
       });
     }
 
-    if (String(staff.password) !== String(password)) {
+    let verifyResult;
+    try {
+      verifyResult = await verifyPassword(String(password), String(staff.password));
+    } catch (vErr) {
+      console.error('verifyPassword failed:', vErr.message);
+      return res.status(500).json({ error: 'Internal server error.' });
+    }
+
+    if (!verifyResult.ok) {
+      loginRateRegisterFailure(rateKey);
       return res.status(401).json({ error: 'Incorrect password. Please try again.' });
     }
 
-    const { password: _ignored, ...safeStaff } = staff;
-    res.json({ message: 'Login successful', staff: safeStaff });
+    // Transparent upgrade: if the stored password was plain text
+    // (or a lower-cost hash), silently replace it with a bcrypt
+    // hash of the just-supplied plain password.
+    if (verifyResult.needsRehash) {
+      try {
+        const newHash = await hashPassword(String(password));
+        db.run(
+          `UPDATE staff_profiles SET password = ? WHERE id = ?`,
+          [newHash, staff.id],
+          (uErr) => {
+            if (uErr) console.error('Staff rehash save error:', uErr.message);
+          }
+        );
+      } catch (hErr) {
+        console.error('Staff rehash failed:', hErr.message);
+      }
+    }
+
+    let session;
+    try {
+      session = await issueStaffSession(staff.id);
+    } catch (sErr) {
+      console.error('Staff session issue failed:', sErr.message);
+      return res.status(500).json({ error: 'Login succeeded but session could not be created.' });
+    }
+
+    loginRateClear(rateKey);
+
+    const {
+      password: _ignored,
+      session_token: _st,
+      session_expires_at: _se,
+      ...safeStaff
+    } = staff;
+
+    res.json({
+      message: 'Login successful',
+      staff: safeStaff,
+      token: session.token,
+      expiresAt: session.expiresAt
+    });
   });
 });
 
-app.post('/api/auth/staff-change-password', (req, res) => {
-  const { isseFileNo, currentPassword, newPassword } = req.body || {};
+// ============================================================
+// STAFF LOGOUT (Bug B3)
+// ============================================================
+app.post('/api/auth/staff-logout', requireStaff, async (req, res) => {
+  try {
+    await revokeStaffSession(req.staff.id);
+    return res.json({ message: 'Logged out successfully.' });
+  } catch (err) {
+    console.error('Staff logout error:', err.message);
+    return res.status(500).json({ error: 'Logout failed.' });
+  }
+});
 
-  if (!isseFileNo || !currentPassword || !newPassword) {
-    return res.status(400).json({ error: 'File Number, current password, and new password are required.' });
+// ============================================================
+// STAFF CHANGE PASSWORD (Bug B3, B4, C4)
+// ============================================================
+// Identity comes from the Bearer token, not the body. A wrong
+// current password returns 400 (NOT 401) so the staff portal's
+// token-interceptor does not mistake it for an expired session.
+app.post('/api/auth/staff-change-password', requireStaff, (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ error: 'Current password and new password are required.' });
   }
-  if (String(newPassword).length < 4) {
-    return res.status(400).json({ error: 'New password must be at least 4 characters.' });
+  if (String(newPassword).length < 8) {
+    return res.status(400).json({ error: 'New password must be at least 8 characters.' });
   }
+
+  const fileNo = req.staff.isse_file_no;
 
   db.get(
-    `SELECT id, password FROM staff_profiles WHERE LOWER(isse_file_no) = LOWER(?)`,
-    [String(isseFileNo).trim()],
-    (err, staff) => {
+    `SELECT id, password FROM staff_profiles WHERE id = ?`,
+    [req.staff.id],
+    async (err, staff) => {
       if (err) return res.status(500).json({ error: err.message });
       if (!staff) return res.status(404).json({ error: 'Staff record not found.' });
       if (!staff.password) {
         return res.status(403).json({ error: 'No password is set for this account. Contact the Super Admin.' });
       }
-      if (String(staff.password) !== String(currentPassword)) {
-        return res.status(401).json({ error: 'Current password is incorrect.' });
+
+      let verifyResult;
+      try {
+        verifyResult = await verifyPassword(String(currentPassword), String(staff.password));
+      } catch (vErr) {
+        console.error('verifyPassword failed:', vErr.message);
+        return res.status(500).json({ error: 'Internal server error.' });
+      }
+      if (!verifyResult.ok) {
+        return res.status(400).json({ error: 'Current password is incorrect.' });
+      }
+
+      let newHash;
+      try {
+        newHash = await hashPassword(String(newPassword));
+      } catch (hErr) {
+        console.error('hashPassword failed:', hErr.message);
+        return res.status(500).json({ error: 'Internal server error.' });
       }
 
       db.run(
         `UPDATE staff_profiles SET password = ? WHERE id = ?`,
-        [String(newPassword), staff.id],
+        [newHash, staff.id],
         function (uErr) {
           if (uErr) return res.status(500).json({ error: uErr.message });
-          logAudit(isseFileNo, 'Staff', 'STAFF_PASSWORD_CHANGED', staff.id, 'Staff changed their own password');
+          logAudit(fileNo, 'Staff', 'STAFF_PASSWORD_CHANGED', staff.id, 'Staff changed their own password');
           res.json({ message: 'Password updated successfully.' });
         }
       );
@@ -539,16 +769,54 @@ app.post('/api/auth/staff-change-password', (req, res) => {
 });
 
 app.post('/api/auth/admin-login', (req, res) => {
-  const { email, password } = req.body;
+  const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: 'Email and password are required.' });
 
-  const query = `SELECT id, username, email, role_id, department, is_active FROM users WHERE LOWER(email) = LOWER(?) AND password = ?`;
-  db.get(query, [email.trim(), password], async (err, user) => {
+  const emailClean = String(email).trim();
+  const rateKey = loginRateKey(req, emailClean);
+
+  if (loginRateLimited(rateKey)) {
+    return res.status(429).json({ error: 'Too many attempts. Try again in 15 minutes.' });
+  }
+
+  const query = `SELECT id, username, email, role_id, department, is_active, password FROM users WHERE LOWER(email) = LOWER(?)`;
+  db.get(query, [emailClean], async (err, user) => {
     if (err) {
       console.error('Admin Login DB Error:', err.message);
       return res.status(500).json({ error: 'Internal server error.' });
     }
-    if (!user) return res.status(401).json({ error: 'Invalid email or password.' });
+    if (!user) {
+      loginRateRegisterFailure(rateKey);
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+
+    let verifyResult;
+    try {
+      verifyResult = await verifyPassword(String(password), String(user.password || ''));
+    } catch (vErr) {
+      console.error('verifyPassword failed:', vErr.message);
+      return res.status(500).json({ error: 'Internal server error.' });
+    }
+    if (!verifyResult.ok) {
+      loginRateRegisterFailure(rateKey);
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+
+    // Transparent upgrade from legacy plain-text password.
+    if (verifyResult.needsRehash) {
+      try {
+        const newHash = await hashPassword(String(password));
+        db.run(
+          `UPDATE users SET password = ? WHERE id = ?`,
+          [newHash, user.id],
+          (uErr) => {
+            if (uErr) console.error('Admin rehash save error:', uErr.message);
+          }
+        );
+      } catch (hErr) {
+        console.error('Admin rehash failed:', hErr.message);
+      }
+    }
 
     // Block login if the account has been deactivated by a Super Admin.
     if (user.is_active === 0 || user.is_active === false) {
@@ -582,6 +850,8 @@ app.post('/api/auth/admin-login', (req, res) => {
       console.error('Session issue failed:', sessionErr.message);
       return res.status(500).json({ error: 'Login succeeded but session could not be created.' });
     }
+
+    loginRateClear(rateKey);
 
     res.json({
       message: 'Login successful',
@@ -658,37 +928,58 @@ app.get('/api/auth/permissions', async (req, res) => {
 app.post('/api/auth/admin-logout', async (req, res) => {
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
-  const { userId } = req.body || {};
+
+  if (!token) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
 
   try {
-    if (token) {
-      const user = await getUserByToken(token);
-      if (user) {
-        await revokeSession(user.id);
-        return res.json({ message: 'Logged out successfully.' });
-      }
-      return res.json({ message: 'Logged out successfully.' });
+    const user = await getUserByToken(token);
+    if (user) {
+      await revokeSession(user.id);
     }
-
-    if (userId) {
-      await revokeSession(userId);
-      return res.json({ message: 'Logged out successfully.' });
-    }
-
-    return res.status(400).json({ error: 'No session token or userId provided.' });
+    return res.json({ message: 'Logged out successfully.' });
   } catch (logoutErr) {
     console.error('Logout error:', logoutErr.message);
     res.status(500).json({ error: 'Logout failed.' });
   }
 });
 
-app.post('/api/admin/reset-password', (req, res) => {
-  const { email, newPassword } = req.body;
-  db.get(`SELECT * FROM users WHERE LOWER(email) = LOWER(?)`, [email.trim()], (err, user) => {
-    if (err || !user) return res.status(404).json({ error: 'No account found with this email address.' });
-    db.run(`UPDATE users SET password = ? WHERE LOWER(email) = LOWER(?)`, [newPassword, email.trim()], (updErr) => {
+app.post('/api/admin/reset-password', requireAuth, requireWorkflow('full'), (req, res) => {
+  const { email, newPassword } = req.body || {};
+
+  if (!email || typeof email !== 'string' || email.trim() === '') {
+    return res.status(400).json({ error: 'Email is required.' });
+  }
+  if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 8) {
+    return res.status(400).json({ error: 'New password must be at least 8 characters.' });
+  }
+
+  const emailClean = email.trim();
+
+  db.get(`SELECT id, username, email FROM users WHERE LOWER(email) = LOWER(?)`, [emailClean], async (err, user) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!user) return res.status(404).json({ error: 'No account found with this email address.' });
+
+    let newHash;
+    try {
+      newHash = await hashPassword(String(newPassword));
+    } catch (hErr) {
+      console.error('hashPassword failed:', hErr.message);
+      return res.status(500).json({ error: 'Internal server error.' });
+    }
+
+    db.run(`UPDATE users SET password = ? WHERE id = ?`, [newHash, user.id], function (updErr) {
       if (updErr) return res.status(500).json({ error: updErr.message });
-      res.json({ message: `Password reset successfully for ${email}.` });
+
+      logAudit(
+        req.authUser.username,
+        req.authContext.role.title,
+        'ADMIN_PASSWORD_RESET',
+        user.id,
+        `Reset password for ${user.email}`
+      );
+      res.json({ message: `Password reset successfully for ${emailClean}.` });
     });
   });
 });
@@ -735,7 +1026,7 @@ app.post('/api/admin/users', requireAuth, requirePermission('settings.manage'), 
     return res.status(400).json({ error: 'Username, email, password, and role are required.' });
   }
 
-  db.get(`SELECT title, scope FROM roles WHERE id = ?`, [role_id], (roleErr, role) => {
+  db.get(`SELECT title, scope FROM roles WHERE id = ?`, [role_id], async (roleErr, role) => {
     if (roleErr || !role) return res.status(400).json({ error: 'Invalid role.' });
 
     if (role.scope === 'department' && !department) {
@@ -745,9 +1036,17 @@ app.post('/api/admin/users', requireAuth, requirePermission('settings.manage'), 
     const dept = role.scope === 'department' ? department : (department || 'All Units');
     const active = is_active === false ? 0 : 1;
 
+    let passwordHash;
+    try {
+      passwordHash = await hashPassword(String(password));
+    } catch (hErr) {
+      console.error('hashPassword failed:', hErr.message);
+      return res.status(500).json({ error: 'Internal server error.' });
+    }
+
     db.run(
       `INSERT INTO users (username, email, password, role_id, department, is_active) VALUES (?, ?, ?, ?, ?, ?)`,
-      [username.trim(), email.trim(), password, role_id, dept, active],
+      [username.trim(), email.trim(), passwordHash, role_id, dept, active],
       function (err) {
         if (err) {
           if (err.message.includes('UNIQUE') || err.message.includes('duplicate')) {
@@ -774,7 +1073,7 @@ app.put('/api/admin/users/:id', requireAuth, requirePermission('settings.manage'
     return res.status(400).json({ error: 'Username, email, and role are required.' });
   }
 
-  db.get(`SELECT title, scope FROM roles WHERE id = ?`, [role_id], (roleErr, role) => {
+  db.get(`SELECT title, scope FROM roles WHERE id = ?`, [role_id], async (roleErr, role) => {
     if (roleErr || !role) return res.status(400).json({ error: 'Invalid role.' });
 
     if (role.scope === 'department' && !department) {
@@ -785,11 +1084,18 @@ app.put('/api/admin/users/:id', requireAuth, requirePermission('settings.manage'
     const active = is_active === false ? 0 : 1;
 
     let sql = `UPDATE users SET username = ?, email = ?, role_id = ?, department = ?, is_active = ?`;
-    let params = [username.trim(), email.trim(), role_id, dept, active];
+    const params = [username.trim(), email.trim(), role_id, dept, active];
 
-    if (password && password.trim() !== '') {
+    if (password && String(password).trim() !== '') {
+      let passwordHash;
+      try {
+        passwordHash = await hashPassword(String(password));
+      } catch (hErr) {
+        console.error('hashPassword failed:', hErr.message);
+        return res.status(500).json({ error: 'Internal server error.' });
+      }
       sql += `, password = ?`;
-      params.push(password);
+      params.push(passwordHash);
     }
 
     sql += ` WHERE id = ?`;
@@ -827,24 +1133,53 @@ app.delete('/api/admin/users/:id', requireAuth, requirePermission('settings.mana
   });
 });
 
-app.put('/api/admin/profile/:id', (req, res) => {
+app.put('/api/admin/profile/:id', requireAuth, (req, res) => {
   const { id } = req.params;
-  const { username, email, currentPassword, newPassword } = req.body;
+  const { username, email, currentPassword, newPassword } = req.body || {};
+
+  if (String(id) !== String(req.authUser.id)) {
+    return res.status(403).json({ error: 'You can only update your own profile.' });
+  }
 
   if (!username || !email || !currentPassword) {
     return res.status(400).json({ error: 'Username, email, and current password are required.' });
   }
 
-  db.get(`SELECT * FROM users WHERE id = ?`, [id], (err, user) => {
-    if (err || !user) return res.status(404).json({ error: 'User not found.' });
-    if (user.password !== currentPassword) return res.status(401).json({ error: 'Current password is incorrect.' });
+  db.get(`SELECT id, password FROM users WHERE id = ?`, [id], async (err, user) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!user) return res.status(404).json({ error: 'User not found.' });
+
+    let verifyResult;
+    try {
+      verifyResult = await verifyPassword(String(currentPassword), String(user.password || ''));
+    } catch (vErr) {
+      console.error('verifyPassword failed:', vErr.message);
+      return res.status(500).json({ error: 'Internal server error.' });
+    }
+
+    // Return 400 (NOT 401) on a wrong current password so the admin-script.js
+    // fetch wrapper does not mistake it for an expired session and log the
+    // user out. See Section 3 B3 item 5 for the same reasoning on the staff side.
+    if (!verifyResult.ok) {
+      return res.status(400).json({ error: 'Current password is incorrect.' });
+    }
 
     let query = `UPDATE users SET username = ?, email = ?`;
-    let params = [username.trim(), email.trim()];
+    const params = [String(username).trim(), String(email).trim()];
 
-    if (newPassword && newPassword.trim() !== '') {
+    if (newPassword && String(newPassword).trim() !== '') {
+      if (String(newPassword).length < 8) {
+        return res.status(400).json({ error: 'New password must be at least 8 characters.' });
+      }
+      let newHash;
+      try {
+        newHash = await hashPassword(String(newPassword));
+      } catch (hErr) {
+        console.error('hashPassword failed:', hErr.message);
+        return res.status(500).json({ error: 'Internal server error.' });
+      }
       query += `, password = ?`;
-      params.push(newPassword);
+      params.push(newHash);
     }
 
     query += ` WHERE id = ?`;
@@ -855,7 +1190,13 @@ app.put('/api/admin/profile/:id', (req, res) => {
         if (updateErr.message.includes('UNIQUE')) return res.status(400).json({ error: 'Username or Email already in use.' });
         return res.status(500).json({ error: updateErr.message });
       }
-      logAudit(username, user.role, 'PROFILE_UPDATED', id, 'Updated own profile');
+      logAudit(
+        req.authUser.username,
+        req.authContext.role.title,
+        'PROFILE_UPDATED',
+        id,
+        'Updated own profile'
+      );
       res.json({ message: 'Profile updated successfully.' });
     });
   });
@@ -865,7 +1206,7 @@ app.put('/api/admin/profile/:id', (req, res) => {
 // 3. STAFF PROFILES
 // ==========================================
 
-app.post('/api/admin/staff', requireAuth, requireWorkflow('unit'), (req, res) => {
+app.post('/api/admin/staff', requireAuth, requireWorkflow('unit'), async (req, res) => {
   const { isseFileNo, fullName, department, designation, gradeLevel, officialEmail, gender,
           lastPromotionDate, nextPromotionDate, password } = req.body;
 
@@ -874,7 +1215,15 @@ app.post('/api/admin/staff', requireAuth, requireWorkflow('unit'), (req, res) =>
     return res.status(403).json({ error: 'You can only register staff in your own department.' });
   }
 
-  const finalPassword = (password && String(password).trim() !== '') ? String(password) : null;
+  let finalPassword = null;
+  if (password && String(password).trim() !== '') {
+    try {
+      finalPassword = await hashPassword(String(password));
+    } catch (hErr) {
+      console.error('hashPassword failed:', hErr.message);
+      return res.status(500).json({ error: 'Internal server error.' });
+    }
+  }
 
   db.run(
     `INSERT INTO staff_profiles (isse_file_no, full_name, department, designation, grade_level, official_email, gender, last_promotion_date, next_promotion_date, password)
@@ -889,10 +1238,19 @@ app.post('/api/admin/staff', requireAuth, requireWorkflow('unit'), (req, res) =>
   );
 });
 
-app.get('/api/admin/staff', requireAuth, (req, res) => {
+app.get('/api/admin/staff', requireAuth, requireAnyPermission(['staff.view', 'staff.add', 'staff.edit', 'staff.delete']), (req, res) => {
   const deptFilter = departmentFilterFor(req);
-  let sql = `SELECT *, (password IS NOT NULL AND password != '') AS has_password FROM staff_profiles`;
-  let params = [];
+  // Explicit column list — never return password, session_token or
+  // session_expires_at. Every column returned here is consumed by
+  // admin-script.js (staff table, edit modal, CSV export, attendance
+  // import preview, department staff list). `has_password` is a
+  // computed boolean used for the "no password yet" indicator.
+  let sql = `SELECT id, isse_file_no, full_name, department, designation, grade_level,
+                    official_email, gender, last_promotion_date, next_promotion_date,
+                    created_at,
+                    (password IS NOT NULL AND password != '') AS has_password
+               FROM staff_profiles`;
+  const params = [];
   if (deptFilter) {
     sql += ` WHERE LOWER(department) = LOWER(?)`;
     params.push(deptFilter);
@@ -983,7 +1341,7 @@ app.post('/api/admin/staff/bulk', requireAuth, requireWorkflow('unit'), (req, re
   let failCount = 0;
   let lastError = '';
 
-  const insertNext = (index) => {
+  const insertNext = async (index) => {
     if (index >= staffList.length) {
       logAudit(req.authUser.username, req.authContext.role.title, 'BULK_STAFF_IMPORTED', null, `Imported ${successCount} staff members`);
       return res.json({
@@ -995,7 +1353,19 @@ app.post('/api/admin/staff/bulk', requireAuth, requireWorkflow('unit'), (req, re
     }
 
     const s = staffList[index];
-    const rowPassword = (s.password && String(s.password).trim() !== '') ? String(s.password) : null;
+
+    let rowPassword = null;
+    if (s.password && String(s.password).trim() !== '') {
+      try {
+        rowPassword = await hashPassword(String(s.password));
+      } catch (hErr) {
+        console.error('Bulk hashPassword failed on row', index, ':', hErr.message);
+        failCount++;
+        lastError = `Row ${index + 1} (${s.isseFileNo}): password hashing failed`;
+        return insertNext(index + 1);
+      }
+    }
+
     db.run(
       `INSERT INTO staff_profiles (isse_file_no, full_name, department, designation, grade_level, official_email, gender, password)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1013,67 +1383,48 @@ app.post('/api/admin/staff/bulk', requireAuth, requireWorkflow('unit'), (req, re
     );
   };
 
-  insertNext(0);
+  insertNext(0).catch((err) => {
+    console.error('Bulk staff import unexpected error:', err && err.message ? err.message : err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Bulk import failed unexpectedly.' });
+    }
+  });
 });
 
 // ==========================================
 // 3b-2. STAFF PASSWORD MANAGEMENT (Super Admin only)
 // ==========================================
 
-app.post('/api/admin/staff/:id/reveal-password',
-  requireAuth, requireWorkflow('full'),
-  (req, res) => {
-    const { adminPassword } = req.body || {};
-
-    const proceed = () => {
-      db.get(`SELECT id, password FROM staff_profiles WHERE id = ?`, [req.params.id], (sErr, staff) => {
-        if (sErr) return res.status(500).json({ error: sErr.message });
-        if (!staff) return res.status(404).json({ error: 'Staff record not found.' });
-        if (!staff.password) {
-          return res.status(404).json({ error: 'No password is set for this staff member yet.' });
-        }
-
-        logAudit(req.authUser.username, req.authContext.role.title,
-          'STAFF_PASSWORD_REVEALED', staff.id, 'Super Admin revealed a staff password');
-        res.json({ password: staff.password });
-      });
-    };
-
-    if (!adminPassword) return proceed();
-
-    db.get(`SELECT password FROM users WHERE id = ?`, [req.authUser.id], (err, admin) => {
-      if (err) return res.status(500).json({ error: err.message });
-      if (!admin) return res.status(404).json({ error: 'Admin user not found.' });
-      if (String(admin.password) !== String(adminPassword)) {
-        return res.status(401).json({ error: 'Incorrect admin password.' });
-      }
-      proceed();
-    });
-  }
-);
-
 app.patch('/api/admin/staff/:id/password',
   requireAuth, requireWorkflow('full'),
   (req, res) => {
     const { adminPassword, newPassword } = req.body || {};
 
-    const proceed = () => {
-      let finalPassword;
+    const proceed = async () => {
+      let finalPlain;
       let mode;
       if (newPassword && String(newPassword).trim() !== '') {
-        if (String(newPassword).length < 4) {
-          return res.status(400).json({ error: 'New password must be at least 4 characters.' });
+        if (String(newPassword).length < 8) {
+          return res.status(400).json({ error: 'New password must be at least 8 characters.' });
         }
-        finalPassword = String(newPassword);
+        finalPlain = String(newPassword);
         mode = 'set';
       } else {
-        finalPassword = generateStaffPassword();
+        finalPlain = generateStaffPassword();
         mode = 'regenerate';
+      }
+
+      let finalHash;
+      try {
+        finalHash = await hashPassword(finalPlain);
+      } catch (hErr) {
+        console.error('hashPassword failed:', hErr.message);
+        return res.status(500).json({ error: 'Internal server error.' });
       }
 
       db.run(
         `UPDATE staff_profiles SET password = ? WHERE id = ?`,
-        [finalPassword, req.params.id],
+        [finalHash, req.params.id],
         function (uErr) {
           if (uErr) return res.status(500).json({ error: uErr.message });
           if (!this.changes) return res.status(404).json({ error: 'Staff record not found.' });
@@ -1083,20 +1434,42 @@ app.patch('/api/admin/staff/:id/password',
             req.params.id,
             mode === 'set' ? 'Super Admin set a staff password' : 'Super Admin regenerated a staff password');
 
-          res.json({ message: 'Password updated.', password: finalPassword });
+          // The plain text is returned ONCE in this response so the Super
+          // Admin can copy it and hand it to the staff member. After this
+          // response the hash cannot be reversed — there is no "Reveal"
+          // button anymore because a bcrypt hash is one-way.
+          res.json({ message: 'Password updated.', password: finalPlain });
         }
       );
     };
 
-    if (!adminPassword) return proceed();
+    if (!adminPassword) {
+      proceed().catch((e) => {
+        console.error('Password update unexpected error:', e && e.message ? e.message : e);
+        if (!res.headersSent) res.status(500).json({ error: 'Internal error.' });
+      });
+      return;
+    }
 
-    db.get(`SELECT password FROM users WHERE id = ?`, [req.authUser.id], (err, admin) => {
+    db.get(`SELECT password FROM users WHERE id = ?`, [req.authUser.id], async (err, admin) => {
       if (err) return res.status(500).json({ error: err.message });
       if (!admin) return res.status(404).json({ error: 'Admin user not found.' });
-      if (String(admin.password) !== String(adminPassword)) {
+
+      let verifyResult;
+      try {
+        verifyResult = await verifyPassword(String(adminPassword), String(admin.password || ''));
+      } catch (vErr) {
+        console.error('verifyPassword failed:', vErr.message);
+        return res.status(500).json({ error: 'Internal server error.' });
+      }
+      if (!verifyResult.ok) {
         return res.status(401).json({ error: 'Incorrect admin password.' });
       }
-      proceed();
+
+      proceed().catch((e) => {
+        console.error('Password update unexpected error:', e && e.message ? e.message : e);
+        if (!res.headersSent) res.status(500).json({ error: 'Internal error.' });
+      });
     });
   }
 );
@@ -1263,7 +1636,8 @@ app.post('/api/admin/officers/hoa', requireAuth, requirePermission('settings.man
 // 4c. ANNUAL LEAVE ENTITLEMENT STATUS
 // ==========================================
 
-app.get('/api/leave/annual-status/:fileNo', (req, res) => {
+app.get('/api/leave/annual-status/:fileNo', requireStaff, (req, res) => {
+  if (!requireSameStaff(req.params.fileNo, req, res)) return;
   const fileNo = req.params.fileNo;
 
   db.get(
@@ -1325,13 +1699,21 @@ app.get('/api/leave/annual-status/:fileNo', (req, res) => {
 // 5. LEAVE SUBMISSION & QUEUES
 // ==========================================
 
-app.post('/api/leave/apply', (req, res) => {
-  const { isseFileNo, fullName, department, designation, startDate, endDate, totalDays, remarks, attachmentId } = req.body;
+app.post('/api/leave/apply', requireStaff, (req, res) => {
+  const { startDate, endDate, totalDays, remarks, attachmentId } = req.body;
   const relievingOfficerName = req.body.relievingOfficerName ? String(req.body.relievingOfficerName).trim() : null;
   const relievingOfficerFileNo = req.body.relievingOfficerFileNo ? String(req.body.relievingOfficerFileNo).trim() : null;
   const relievingOfficerDepartment = req.body.relievingOfficerDepartment ? String(req.body.relievingOfficerDepartment).trim() : null;
   let leaveType = req.body.leaveType;
-  if (!isseFileNo || !startDate || !endDate || !leaveType) {
+
+  // Identity comes from the bearer token, not the request body,
+  // so a staff member cannot file leave on behalf of another officer.
+  const isseFileNo  = req.staff.isse_file_no;
+  const fullName    = req.staff.full_name;
+  const department  = req.staff.department;
+  const designation = req.staff.designation;
+
+  if (!startDate || !endDate || !leaveType) {
     return res.status(400).json({ error: 'Please provide all required application fields.' });
   }
 
@@ -1585,7 +1967,7 @@ app.post('/api/leave/apply', (req, res) => {
 // ==========================================
 // STAFF DIRECTORY SEARCH (public, staff-portal autocomplete)
 // ==========================================
-app.get('/api/staff-directory/search', (req, res) => {
+app.get('/api/staff-directory/search', requireStaff, (req, res) => {
   const q = String(req.query.q || '').trim();
   if (!q || q.length < 2) return res.json([]);
 
@@ -1604,7 +1986,8 @@ app.get('/api/staff-directory/search', (req, res) => {
   );
 });
 
-app.get('/api/leave/staff-history/:fileNo', (req, res) => {
+app.get('/api/leave/staff-history/:fileNo', requireStaff, (req, res) => {
+  if (!requireSameStaff(req.params.fileNo, req, res)) return;
   db.all(`SELECT * FROM leave_requests WHERE LOWER(isse_file_no) = LOWER(?) ORDER BY id DESC`, [req.params.fileNo], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
@@ -1811,13 +2194,10 @@ app.patch('/api/leave/admin-action', requireAuth, requireWorkflow('final'), (req
 // 6. RESUMPTION WORKFLOW
 // ==========================================
 
-app.patch('/api/leave/cancel/:id', (req, res) => {
+app.patch('/api/leave/cancel/:id', requireStaff, (req, res) => {
   const { id } = req.params;
-  const { isseFileNo } = req.body || {};
-
-  if (!isseFileNo) {
-    return res.status(400).json({ error: 'ISSE File Number is required for verification.' });
-  }
+  // Identity comes from the bearer token — the request body is ignored.
+  const isseFileNo = req.staff.isse_file_no;
 
   db.get(
     `SELECT id, isse_file_no, hou_status, overall_status, full_name, department, leave_type,
@@ -1876,7 +2256,7 @@ app.patch('/api/leave/cancel/:id', (req, res) => {
   );
 });
 
-app.post('/api/leave/notify-resumption', (req, res) => {
+app.post('/api/leave/notify-resumption', requireStaff, (req, res) => {
   const { requestId, resumptionDate, resumptionRemarks } = req.body;
   if (!requestId) return res.status(400).json({ error: 'Request ID is required.' });
 
@@ -1884,10 +2264,14 @@ app.post('/api/leave/notify-resumption', (req, res) => {
   const remarksToSave = resumptionRemarks || 'Staff reported resumption of duty.';
 
   db.get(
-    `SELECT department, full_name, leave_type, resumption_status FROM leave_requests WHERE id = ?`,
+    `SELECT isse_file_no, department, full_name, leave_type, resumption_status FROM leave_requests WHERE id = ?`,
     [requestId],
     (lookupErr, row) => {
       if (lookupErr || !row) return res.status(404).json({ error: 'Leave request not found.' });
+
+      if (String(row.isse_file_no || '').toLowerCase() !== String(req.staff.isse_file_no).toLowerCase()) {
+        return res.status(403).json({ error: 'You can only file resumption notices for your own leave applications.' });
+      }
 
       const currentStatus = (row.resumption_status || '').toUpperCase();
       if (currentStatus === 'RESUMPTION APPROVED') {
@@ -1943,7 +2327,7 @@ const ALLOWED_ATTACHMENT_MIMES = [
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 ];
 
-app.post('/api/leave/upload-attachment', upload.single('file'), (req, res) => {
+app.post('/api/leave/upload-attachment', requireStaff, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file received.' });
 
   const { originalname, mimetype, size, buffer } = req.file;
@@ -1981,11 +2365,11 @@ app.post('/api/leave/upload-attachment', upload.single('file'), (req, res) => {
 app.get('/api/leave/attachment/:id', async (req, res) => {
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
-  const isseFileNo = req.query.isseFileNo ? String(req.query.isseFileNo) : null;
 
   db.get(
     `SELECT a.id, a.filename, a.mime_type, a.file_data,
-            lr.isse_file_no AS owner_file_no
+            lr.isse_file_no AS owner_file_no,
+            lr.department  AS owner_department
        FROM leave_attachments a
        LEFT JOIN leave_requests lr ON lr.id = a.leave_request_id
       WHERE a.id = ?`,
@@ -1997,23 +2381,53 @@ app.get('/api/leave/attachment/:id', async (req, res) => {
       let authorized = false;
 
       if (token) {
+        // (a) Admin token — allowed if global, or if department matches.
         try {
-          const u = await getUserByToken(token);
-          if (u) authorized = true;
-        } catch (_) { }
-      }
+          const adminUser = await getUserByToken(token);
+          if (adminUser) {
+            const ctx = await getUserAuthContext(adminUser.id);
+            if (ctx) {
+              if (ctx.scope === 'global') {
+                authorized = true;
+              } else if (ctx.scope === 'department') {
+                const adminDept = String(adminUser.department || '').trim().toLowerCase();
+                const ownerDept = String(row.owner_department || '').trim().toLowerCase();
+                if (adminDept && ownerDept && adminDept === ownerDept) {
+                  authorized = true;
+                }
+              }
+            }
+          }
+        } catch (_) { /* fall through to staff path */ }
 
-      if (!authorized && isseFileNo && row.owner_file_no &&
-          String(row.owner_file_no).toLowerCase() === isseFileNo.toLowerCase()) {
-        authorized = true;
+        // (b) Staff token — allowed only if the request belongs to them.
+        if (!authorized) {
+          try {
+            const staff = await getStaffByToken(token);
+            if (staff && row.owner_file_no &&
+                String(row.owner_file_no).toLowerCase() === String(staff.isse_file_no).toLowerCase()) {
+              authorized = true;
+            }
+          } catch (_) { /* fall through to 403 */ }
+        }
       }
 
       if (!authorized) {
         return res.status(403).json({ error: 'Not authorized to view this attachment.' });
       }
 
+      // Sanitise the filename before putting it into Content-Disposition.
+      // Strip CR/LF, quotes, backslashes, control chars and anything not
+      // printable ASCII. Guarantee a non-empty fallback so the header is
+      // never malformed.
+      const safeName = String(row.filename || 'attachment')
+        .replace(/[\r\n\t]/g, ' ')
+        .replace(/["\\]/g, '')
+        .replace(/[^\x20-\x7E]/g, '_')
+        .substring(0, 200) || 'attachment';
+
       res.setHeader('Content-Type', row.mime_type || 'application/octet-stream');
-      res.setHeader('Content-Disposition', `inline; filename="${row.filename}"`);
+      res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
       res.send(row.file_data);
     }
   );
@@ -2220,7 +2634,8 @@ app.get('/api/notifications', requireAuth, (req, res) => {
 // STAFF NOTIFICATIONS (staff portal, fileNo-scoped)
 // ==========================================
 
-app.get('/api/staff-notifications/:fileNo', (req, res) => {
+app.get('/api/staff-notifications/:fileNo', requireStaff, (req, res) => {
+  if (!requireSameStaff(req.params.fileNo, req, res)) return;
   const fileNo = String(req.params.fileNo || '').trim();
   if (!fileNo) return res.json([]);
 
@@ -2239,7 +2654,8 @@ app.get('/api/staff-notifications/:fileNo', (req, res) => {
   );
 });
 
-app.get('/api/staff-notifications/:fileNo/unread-count', (req, res) => {
+app.get('/api/staff-notifications/:fileNo/unread-count', requireStaff, (req, res) => {
+  if (!requireSameStaff(req.params.fileNo, req, res)) return;
   const fileNo = String(req.params.fileNo || '').trim();
   if (!fileNo) return res.json({ count: 0 });
 
@@ -2256,12 +2672,22 @@ app.get('/api/staff-notifications/:fileNo/unread-count', (req, res) => {
   );
 });
 
-app.patch('/api/staff-notifications/:id/read', (req, res) => {
+app.patch('/api/staff-notifications/:id/read', requireStaff, (req, res) => {
+  // Ownership is enforced in the UPDATE itself: only a staff row whose
+  // recipient_id matches the bearer token's file number is touched.
+  // If the row belongs to someone else (or doesn't exist), this.changes
+  // is 0 and we return 404 — same message for both so the caller cannot
+  // probe for existence of another staff member's notification IDs.
   db.run(
-    `UPDATE notifications SET is_read = 1 WHERE id = ? AND recipient_type = 'staff'`,
-    [req.params.id],
-    (err) => {
+    `UPDATE notifications SET is_read = 1
+      WHERE id = ? AND recipient_type = 'staff'
+        AND LOWER(recipient_id) = LOWER(?)`,
+    [req.params.id, req.staff.isse_file_no],
+    function (err) {
       if (err) return res.status(500).json({ error: err.message });
+      if (!this.changes) {
+        return res.status(404).json({ error: 'Notification not found or does not belong to you.' });
+      }
       res.json({ success: true });
     }
   );
@@ -2271,6 +2697,42 @@ app.patch('/api/notifications/:id/read', requireAuth, (req, res) => {
   db.run(`UPDATE notifications SET is_read = 1 WHERE id = ?`, [req.params.id], (err) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json({ success: true });
+  });
+});
+
+app.delete('/api/notifications/all', requireAuth, (req, res) => {
+  const ctx = req.authContext;
+  const role = viewRoleFor(ctx);
+  const canSeeStaffEnquiries =
+    ctx.authority === 'full' ||
+    (ctx.permissions && (ctx.permissions.has('staff_enquiries.manage') || ctx.permissions.has('staff_enquiries.view')));
+
+  let where = `recipient_type != 'staff'`;
+  const params = [];
+
+  if (role === 'super_admin') {
+    // all non-staff
+  } else if (role === 'hou') {
+    const dept = (ctx.user && ctx.user.department) ? ctx.user.department : '';
+    if (canSeeStaffEnquiries) {
+      where += ` AND ((recipient_type = 'hou' AND LOWER(recipient_id) = LOWER(?)) OR recipient_type = 'admin')`;
+    } else {
+      where += ` AND recipient_type = 'hou' AND LOWER(recipient_id) = LOWER(?)`;
+    }
+    params.push(dept);
+  } else if (role === 'head_of_admin') {
+    where += canSeeStaffEnquiries
+      ? ` AND (recipient_type = 'hoa' OR recipient_type = 'admin')`
+      : ` AND recipient_type = 'hoa'`;
+  } else {
+    where += canSeeStaffEnquiries
+      ? ` AND recipient_type = 'admin'`
+      : ` AND 1=0`;
+  }
+
+  db.run(`DELETE FROM notifications WHERE ${where}`, params, function (err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ success: true, deleted: this.changes || 0 });
   });
 });
 
@@ -2421,18 +2883,24 @@ app.get('/api/admin/calendar-events', requireAuth, (req, res) => {
   });
 });
 
-app.delete('/api/staff-notifications/:id', (req, res) => {
+app.delete('/api/staff-notifications/:id', requireStaff, (req, res) => {
   db.run(
-    `DELETE FROM notifications WHERE id = ? AND recipient_type = 'staff'`,
-    [req.params.id],
+    `DELETE FROM notifications
+      WHERE id = ? AND recipient_type = 'staff'
+        AND LOWER(recipient_id) = LOWER(?)`,
+    [req.params.id, req.staff.isse_file_no],
     function (err) {
       if (err) return res.status(500).json({ error: err.message });
-      res.json({ success: true, deleted: this.changes || 0 });
+      if (!this.changes) {
+        return res.status(404).json({ error: 'Notification not found or does not belong to you.' });
+      }
+      res.json({ success: true, deleted: this.changes });
     }
   );
 });
 
-app.delete('/api/staff-notifications/all/:fileNo', (req, res) => {
+app.delete('/api/staff-notifications/all/:fileNo', requireStaff, (req, res) => {
+  if (!requireSameStaff(req.params.fileNo, req, res)) return;
   const fileNo = String(req.params.fileNo || '').trim();
   if (!fileNo) return res.status(400).json({ error: 'File No required.' });
 
@@ -2451,6 +2919,34 @@ app.delete('/api/staff-notifications/all/:fileNo', (req, res) => {
 // ============================================================
 
 const ATTENDANCE_DEFAULT_THRESHOLDS = { warning: 75, good: 90, excellent: 95 };
+
+// ============================================================
+// ATTENDANCE THRESHOLDS — SHARED READER (Bug A1)
+// ============================================================
+// Used by the existing admin GET route AND by the public
+// read-only route below, so the two portals always agree on
+// the Excellent / Good / Low / Warning labels.
+function readAttendanceThresholds(callback) {
+  db.all(
+    `SELECT setting_key, setting_value FROM system_settings
+      WHERE setting_key IN ('attendance.warning_threshold',
+                            'attendance.good_threshold',
+                            'attendance.excellent_threshold')`,
+    [],
+    (err, rows) => {
+      if (err) return callback(err);
+      const out = { ...ATTENDANCE_DEFAULT_THRESHOLDS };
+      (rows || []).forEach(r => {
+        const v = parseFloat(r.setting_value);
+        if (isNaN(v)) return;
+        if (r.setting_key === 'attendance.warning_threshold')   out.warning   = v;
+        if (r.setting_key === 'attendance.good_threshold')      out.good      = v;
+        if (r.setting_key === 'attendance.excellent_threshold') out.excellent = v;
+      });
+      callback(null, out);
+    }
+  );
+}
 
 // ------------------------------------------------------------------
 // LEAVE TYPE VISIBILITY SETTINGS
@@ -2530,72 +3026,105 @@ app.get('/api/settings/hidden-leave-types', (req, res) => {
   );
 });
 
+// ============================================================
+// PUBLIC ATTENDANCE-THRESHOLDS READER (Bug A1)
+// ============================================================
+// The staff portal needs the SAME threshold values the admin
+// uses to label attendance percentages, but staff cannot call
+// the admin route (which needs `attendance.view`). This route
+// exposes ONLY the three numbers — no other settings, no auth.
+app.get('/api/settings/attendance-thresholds', (req, res) => {
+  readAttendanceThresholds((err, thresholds) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(thresholds);
+  });
+});
+
 app.get('/api/admin/attendance/settings',
   requireAuth, requirePermission('attendance.view'),
   (req, res) => {
-    db.all(
-      `SELECT setting_key, setting_value FROM system_settings
-        WHERE setting_key IN ('attendance.warning_threshold',
-                              'attendance.good_threshold',
-                              'attendance.excellent_threshold')`,
-      [],
-      (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
-        const out = { ...ATTENDANCE_DEFAULT_THRESHOLDS };
-        (rows || []).forEach(r => {
-          const v = parseFloat(r.setting_value);
-          if (isNaN(v)) return;
-          if (r.setting_key === 'attendance.warning_threshold')   out.warning   = v;
-          if (r.setting_key === 'attendance.good_threshold')      out.good      = v;
-          if (r.setting_key === 'attendance.excellent_threshold') out.excellent = v;
-        });
-        res.json(out);
-      }
-    );
+    readAttendanceThresholds((err, thresholds) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json(thresholds);
+    });
   }
 );
 
 app.put('/api/admin/attendance/settings',
   requireAuth, requirePermission('attendance.manage'),
   (req, res) => {
-    const { warning, good, excellent } = req.body;
-    const pairs = [];
-    if (typeof warning   === 'number') pairs.push(['attendance.warning_threshold',   String(warning)]);
-    if (typeof good      === 'number') pairs.push(['attendance.good_threshold',      String(good)]);
-    if (typeof excellent === 'number') pairs.push(['attendance.excellent_threshold', String(excellent)]);
+    const { warning, good, excellent } = req.body || {};
 
-    if (!pairs.length) {
+    // Server-side validation of whatever the client actually sent.
+    const supplied = { warning, good, excellent };
+    const fieldToKey = {
+      warning:   'attendance.warning_threshold',
+      good:      'attendance.good_threshold',
+      excellent: 'attendance.excellent_threshold'
+    };
+    const toSave = [];
+
+    for (const field of Object.keys(fieldToKey)) {
+      if (supplied[field] === undefined) continue;
+      const n = Number(supplied[field]);
+      if (!Number.isFinite(n) || n < 0 || n > 100) {
+        return res.status(400).json({
+          error: `"${field}" must be a number between 0 and 100.`
+        });
+      }
+      toSave.push([fieldToKey[field], String(n)]);
+    }
+
+    if (!toSave.length) {
       return res.status(400).json({ error: 'No valid thresholds provided.' });
     }
 
-    let done = 0;
-    let firstError = null;
+    // Read current values so we can validate the merged ordering.
+    readAttendanceThresholds((readErr, current) => {
+      if (readErr) return res.status(500).json({ error: readErr.message });
 
-    pairs.forEach(([key, value]) => {
-      db.run(
-        `INSERT INTO system_settings (setting_key, setting_value, updated_at)
-         VALUES (?, ?, NOW())
-         ON CONFLICT (setting_key) DO UPDATE
-           SET setting_value = EXCLUDED.setting_value,
-               updated_at    = NOW()
-         RETURNING setting_key`,
-        [key, value],
-        (e) => {
-          if (e) {
-            console.error('Settings save error:', e.message);
-            if (!firstError) firstError = e.message;
-          }
-          if (++done === pairs.length) {
-            if (firstError) {
-              return res.status(500).json({ error: `Failed to save thresholds: ${firstError}` });
+      const merged = {
+        warning:   supplied.warning   !== undefined ? Number(supplied.warning)   : current.warning,
+        good:      supplied.good      !== undefined ? Number(supplied.good)      : current.good,
+        excellent: supplied.excellent !== undefined ? Number(supplied.excellent) : current.excellent
+      };
+
+      if (!(merged.warning <= merged.good && merged.good <= merged.excellent)) {
+        return res.status(400).json({
+          error: 'Thresholds must satisfy Warning ≤ Good ≤ Excellent. ' +
+            `Received: warning=${merged.warning}, good=${merged.good}, excellent=${merged.excellent}.`
+        });
+      }
+
+      let done = 0;
+      let firstError = null;
+
+      toSave.forEach(([key, value]) => {
+        db.run(
+          `INSERT INTO system_settings (setting_key, setting_value, updated_at)
+           VALUES (?, ?, NOW())
+           ON CONFLICT (setting_key) DO UPDATE
+             SET setting_value = EXCLUDED.setting_value,
+                 updated_at    = NOW()
+           RETURNING setting_key`,
+          [key, value],
+          (e) => {
+            if (e) {
+              console.error('Settings save error:', e.message);
+              if (!firstError) firstError = e.message;
             }
-            logAudit(req.authUser.username, req.authContext.role.title,
-              'ATTENDANCE_SETTINGS_UPDATED', null,
-              `Thresholds set: warning=${warning ?? '-'} good=${good ?? '-'} excellent=${excellent ?? '-'}`);
-            res.json({ message: 'Thresholds updated.' });
+            if (++done === toSave.length) {
+              if (firstError) {
+                return res.status(500).json({ error: `Failed to save thresholds: ${firstError}` });
+              }
+              logAudit(req.authUser.username, req.authContext.role.title,
+                'ATTENDANCE_SETTINGS_UPDATED', null,
+                `Thresholds set: warning=${merged.warning} good=${merged.good} excellent=${merged.excellent}`);
+              res.json({ message: 'Thresholds updated.' });
+            }
           }
-        }
-      );
+        );
+      });
     });
   }
 );
@@ -2653,16 +3182,22 @@ app.get('/api/admin/attendance/staff/:fileNo',
       return res.status(400).json({ error: 'Valid year and month are required.' });
     }
 
-    db.get(
-      `SELECT * FROM attendance_records
-        WHERE LOWER(isse_file_no) = LOWER(?) AND year = ? AND month = ?`,
-      [req.params.fileNo, year, month],
-      (err, row) => {
-        if (err) return res.status(500).json({ error: err.message });
-        if (!row) return res.status(404).json({ error: 'Attendance record not found.' });
-        res.json(row);
-      }
-    );
+    const deptFilter = departmentFilterFor(req);
+
+    let sql = `SELECT * FROM attendance_records
+                WHERE LOWER(isse_file_no) = LOWER(?) AND year = ? AND month = ?`;
+    const params = [req.params.fileNo, year, month];
+
+    if (deptFilter) {
+      sql += ` AND LOWER(department) = LOWER(?)`;
+      params.push(deptFilter);
+    }
+
+    db.get(sql, params, (err, row) => {
+      if (err) return res.status(500).json({ error: err.message });
+      if (!row) return res.status(404).json({ error: 'Attendance record not found.' });
+      res.json(row);
+    });
   }
 );
 
@@ -3027,7 +3562,8 @@ app.delete('/api/admin/attendance/month',
   }
 );
 
-app.get('/api/attendance/my-months/:isseFileNo', (req, res) => {
+app.get('/api/attendance/my-months/:isseFileNo', requireStaff, (req, res) => {
+  if (!requireSameStaff(req.params.isseFileNo, req, res)) return;
   const fileNo = req.params.isseFileNo;
   if (!fileNo) return res.status(400).json({ error: 'ISSE File Number required.' });
 
@@ -3043,7 +3579,8 @@ app.get('/api/attendance/my-months/:isseFileNo', (req, res) => {
   );
 });
 
-app.get('/api/attendance/my-record/:isseFileNo', (req, res) => {
+app.get('/api/attendance/my-record/:isseFileNo', requireStaff, (req, res) => {
+  if (!requireSameStaff(req.params.isseFileNo, req, res)) return;
   const fileNo = req.params.isseFileNo;
   const year  = parseInt(req.query.year, 10);
   const month = parseInt(req.query.month, 10);
@@ -3068,8 +3605,11 @@ app.get('/api/attendance/my-record/:isseFileNo', (req, res) => {
 // STAFF ENQUIRIES MODULE
 // ============================================================
 
-app.post('/api/staff-enquiries', (req, res) => {
-  const { isseFileNo, subject, message } = req.body || {};
+app.post('/api/staff-enquiries', requireStaff, (req, res) => {
+  const { subject, message } = req.body || {};
+  // Identity comes from the bearer token — the body's isseFileNo is
+  // ignored so a staff member cannot submit on behalf of another.
+  const isseFileNo = req.staff.isse_file_no;
 
   if (!isseFileNo || !message || !String(message).trim()) {
     return res.status(400).json({ error: 'ISSE File Number and message are required.' });
@@ -3128,7 +3668,8 @@ app.post('/api/staff-enquiries', (req, res) => {
   );
 });
 
-app.get('/api/staff-enquiries/my/:fileNo', (req, res) => {
+app.get('/api/staff-enquiries/my/:fileNo', requireStaff, (req, res) => {
+  if (!requireSameStaff(req.params.fileNo, req, res)) return;
   db.all(
     `SELECT id, subject, message, status, staff_viewed_reply_at, created_at, updated_at
        FROM staff_enquiries
@@ -3142,7 +3683,8 @@ app.get('/api/staff-enquiries/my/:fileNo', (req, res) => {
   );
 });
 
-app.get('/api/staff-enquiries/my/:fileNo/:id', (req, res) => {
+app.get('/api/staff-enquiries/my/:fileNo/:id', requireStaff, (req, res) => {
+  if (!requireSameStaff(req.params.fileNo, req, res)) return;
   const { fileNo, id } = req.params;
 
   db.get(

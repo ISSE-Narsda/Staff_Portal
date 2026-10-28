@@ -6,6 +6,81 @@ const API_BASE = (window.location.hostname === 'localhost' || window.location.ho
   ? (window.location.port === '5000' ? '/api' : 'http://localhost:5000/api')
   : '/api';
 
+// ============================================================
+// STAFF AUTH TOKEN STORAGE (Part 6)
+// ============================================================
+
+function getStaffToken() {
+  return sessionStorage.getItem('isse_staff_token');
+}
+
+function setStaffToken(token) {
+  if (token) sessionStorage.setItem('isse_staff_token', token);
+}
+
+function clearStaffToken() {
+  sessionStorage.removeItem('isse_staff_token');
+}
+
+// ============================================================
+// GLOBAL FETCH WRAPPER (Part 6)
+// ============================================================
+// Adds the Bearer token to every request that targets API_BASE.
+// A 401 whose JSON body has `code: 'SESSION_INVALID'` means the
+// server has no valid session for this token — clear local state
+// and return to the login modal. The login endpoint is deliberately
+// excluded: a 401 there is a "wrong password", not an expired session.
+//
+// The `alert(...)` call below uses the custom modal that script.js
+// installs further down; at fetch time that override is already in
+// place because the wrapper's callback runs asynchronously.
+
+const _originalFetch = window.fetch.bind(window);
+window.fetch = function(url, options) {
+  const opts = Object.assign({}, options);
+  const urlStr = String(url);
+
+  if (urlStr.startsWith(API_BASE)) {
+    const token = getStaffToken();
+    if (token) {
+      opts.headers = Object.assign({}, opts.headers || {});
+      opts.headers['Authorization'] = 'Bearer ' + token;
+    }
+  }
+
+  return _originalFetch(url, opts).then(function(res) {
+    if (res.status === 401
+        && urlStr.startsWith(API_BASE)
+        && !urlStr.includes('/auth/staff-login')) {
+      // Clone before reading so callers still get the original body.
+      return res.clone().json().then(function(body) {
+        if (body && body.code === 'SESSION_INVALID') {
+          const wasAlreadyLoggedOut = currentStaff === null;
+          clearStaffToken();
+          sessionStorage.removeItem('currentStaff');
+          sessionStorage.removeItem('activeSection');
+          currentStaff = null;
+          cachedLeaveRecords = [];
+          try {
+            if (typeof renderStatusTable === 'function') renderStatusTable();
+            if (typeof renderHistoryTable === 'function') renderHistoryTable();
+            if (typeof showLoginModal === 'function') showLoginModal();
+          } catch (_) { /* ignore */ }
+          if (!wasAlreadyLoggedOut) {
+            try {
+              alert('Your session has expired. Please log in again.');
+            } catch (_) { /* ignore */ }
+          }
+        }
+        return res;
+      }).catch(function() {
+        return res;
+      });
+    }
+    return res;
+  });
+};
+
 // ---- Leave durations defined in WORKING DAYS ----
 const LEAVE_DAYS_MAP = {
   'Annual Leave (30 Working Days)': 30,
@@ -235,10 +310,13 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Session Check
-  const loginModal = document.getElementById('staffLoginModal');
+    const loginModal = document.getElementById('staffLoginModal');
   const activeSession = sessionStorage.getItem('currentStaff');
+  const activeToken   = sessionStorage.getItem('isse_staff_token');
 
-  if (activeSession) {
+  // Both the staff object AND the bearer token must be present.
+  // If either is missing, discard whatever is left and force a login.
+  if (activeSession && activeToken) {
     try {
       currentStaff = JSON.parse(activeSession);
       populateStaffProfile(currentStaff);
@@ -247,9 +325,14 @@ document.addEventListener('DOMContentLoaded', () => {
       refreshStaffNotifBadge();
     } catch (e) {
       sessionStorage.removeItem('currentStaff');
+      clearStaffToken();
       showLoginModal();
     }
   } else {
+    if (activeSession && !activeToken) {
+      sessionStorage.removeItem('currentStaff');
+    }
+    clearStaffToken();
     showLoginModal();
   }
 
@@ -848,8 +931,11 @@ async function handleStaffLogin() {
       return;
     }
 
-    currentStaff = data.staff;
+        currentStaff = data.staff;
     sessionStorage.setItem('currentStaff', JSON.stringify(currentStaff));
+    if (data.token) {
+      setStaffToken(data.token);
+    }
 
     populateStaffProfile(currentStaff);
 
@@ -1853,18 +1939,29 @@ async function fetchStaffLeaveHistory(isseFileNo) {
 }
 
 function handleLogout() {
-  sessionStorage.removeItem('currentStaff');
-  sessionStorage.removeItem('activeSection');
-  localStorage.removeItem('currentStaff');
-  currentStaff = null;
-  cachedLeaveRecords = [];
-  renderStatusTable();
-  renderHistoryTable();
+  // Best-effort: revoke the server-side session, then clear locally.
+  // If the fetch fails (offline, 401), local state is still cleared —
+  // the server-side token will expire on its own within 12 hours.
+  const finish = () => {
+    clearStaffToken();
+    sessionStorage.removeItem('currentStaff');
+    sessionStorage.removeItem('activeSection');
+    localStorage.removeItem('currentStaff');
+    currentStaff = null;
+    cachedLeaveRecords = [];
+    renderStatusTable();
+    renderHistoryTable();
 
-  const pwdInput = document.getElementById('loginPasswordInput');
-  if (pwdInput) pwdInput.value = '';
+    const pwdInput = document.getElementById('loginPasswordInput');
+    if (pwdInput) pwdInput.value = '';
 
-  showLoginModal();
+    showLoginModal();
+  };
+
+  fetch(`${API_BASE}/auth/staff-logout`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' }
+  }).then(finish).catch(finish);
 }
 
 async function applyHiddenLeaveTypes() {
@@ -1950,9 +2047,33 @@ const MY_ATTENDANCE_MONTH_NAMES = [
   'July','August','September','October','November','December'
 ];
 
-// Mirror of the admin defaults. Kept here so the staff portal does not
-// need an authenticated call to /api/admin/attendance/settings.
+// Default thresholds — kept as a fallback if the server is unreachable.
+// The live values are loaded from the public endpoint
+// GET /api/settings/attendance-thresholds at the start of
+// loadMyAttendancePage(), so the staff portal always agrees with the
+// admin portal after the Super Admin changes them.
 const MY_ATTENDANCE_THRESHOLDS = { warning: 75, good: 90, excellent: 95 };
+let cachedMyAttendanceThresholds = { ...MY_ATTENDANCE_THRESHOLDS };
+
+async function loadMyAttendanceThresholds() {
+  try {
+    const res = await fetch(`${API_BASE}/settings/attendance-thresholds`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data &&
+        typeof data.warning === 'number' &&
+        typeof data.good === 'number' &&
+        typeof data.excellent === 'number') {
+      cachedMyAttendanceThresholds = {
+        warning:   data.warning,
+        good:      data.good,
+        excellent: data.excellent
+      };
+    }
+  } catch (_) {
+    // Keep the default values in place.
+  }
+}
 
 let cachedMyAttendanceMonths = [];
 let cachedMyAttendanceRecord = null;
@@ -1961,7 +2082,7 @@ let currentMyAttendanceMonth = null;
 let myAttendanceLoaded       = false;
 
 function classifyMyAttendance(pct) {
-  const t = MY_ATTENDANCE_THRESHOLDS;
+  const t = cachedMyAttendanceThresholds;
   if (pct >= 100)         return { label: 'Perfect',   cls: 'status-approved', color: '#16A34A' };
   if (pct >= t.excellent) return { label: 'Excellent', cls: 'status-approved', color: '#0284C7' };
   if (pct >= t.good)      return { label: 'Good',      cls: 'status-pending',  color: '#F59E0B' };
@@ -1973,6 +2094,9 @@ async function loadMyAttendancePage() {
   const tbody = document.getElementById('myAttendanceTableBody');
   const sel   = document.getElementById('myAttendanceMonthSelect');
   if (!tbody || !sel) return;
+
+  // Fetch the current thresholds BEFORE rendering so labels are fresh.
+  await loadMyAttendanceThresholds();
 
   if (!currentStaff || !currentStaff.isse_file_no) {
     sel.innerHTML = '<option value="">No data available</option>';
